@@ -1,25 +1,23 @@
 from ollama import chat
 
 
-def ask_llm(question):
+def ask_llm(messages):
     response = chat(
         model="qwen2.5:7b",
-        messages=[
-            {
-                "role": "user",
-                "content": question
-            }
-        ]
+        messages=messages
     )
 
     return response.message.content
 
+
+messages = []
 
 print("====================================")
 print("      Local AI Assistant")
 print("      Model: Qwen 2.5 7B")
 print("====================================")
 print("Type 'exit' to quit.\n")
+
 
 while True:
     question = input("You: ")
@@ -28,6 +26,20 @@ while True:
         print("Goodbye!")
         break
 
-    answer = ask_llm(question)
+    messages.append(
+        {
+            "role": "user",
+            "content": question
+        }
+    )
+
+    answer = ask_llm(messages)
+
+    messages.append(
+        {
+            "role": "assistant",
+            "content": answer
+        }
+    )
 
     print(f"\nAI: {answer}\n")
