@@ -1,20 +1,17 @@
-from ollama import chat
+from config import SYSTEM_PROMPT
+from llm import ask_llm
 
 
-def ask_llm(messages):
-    response = chat(
-        model="qwen2.5:7b",
-        messages=messages
-    )
+messages = [
+    {
+        "role": "system",
+        "content": SYSTEM_PROMPT
+    }
+]
 
-    return response.message.content
-
-
-messages = []
 
 print("====================================")
-print("      Local AI Assistant")
-print("      Model: Qwen 2.5 7B")
+print("      AI Document Intelligence")
 print("====================================")
 print("Type 'exit' to quit.\n")
 
