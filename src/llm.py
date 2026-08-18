@@ -1,5 +1,5 @@
 from ollama import chat
-from config import MODEL_NAME
+from src.config import MODEL_NAME
 
 
 def ask_llm(messages):
