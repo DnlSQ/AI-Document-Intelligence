@@ -15,12 +15,32 @@ def tokenize(text):
     return re.findall(r"\b\w+\b", text.lower())
 
 
+def normalize_text(text):
+    """
+    Normalize text for phrase matching.
+
+    The normalization:
+    - Converts text to lowercase.
+    - Removes extra whitespace.
+    - Preserves technical characters such as hyphens.
+
+    Args:
+        text: Input text.
+
+    Returns:
+        Normalized text.
+    """
+
+    return re.sub(r"\s+", " ", text.lower()).strip()
+
+
 def calculate_relevance_score(query, text):
     """
-    Calculate a simple lexical relevance score.
+    Calculate a lexical relevance score.
 
-    The score represents how many query terms
-    are present in the chunk text.
+    The score is based on:
+    1. Number of unique query terms found in the text.
+    2. Bonus for an exact phrase match.
 
     Args:
         query: User question.
@@ -33,7 +53,38 @@ def calculate_relevance_score(query, text):
     query_tokens = set(tokenize(query))
     text_tokens = set(tokenize(text))
 
-    return len(query_tokens.intersection(text_tokens))
+    # Base score: number of unique query terms
+    # present in the document chunk.
+    term_score = len(
+        query_tokens.intersection(text_tokens)
+    )
+
+    # Normalize both query and text before checking
+    # whether the complete query appears as an exact phrase.
+    normalized_query = normalize_text(query)
+    normalized_text = normalize_text(text)
+
+    # Phrase bonus.
+    #
+    # Example:
+    #
+    # Query:
+    # "collector-emitter voltage"
+    #
+    # Text:
+    # "VCEO collector-emitter voltage open base -50 V"
+    #
+    # The complete phrase appears in the text, so
+    # the chunk receives an additional relevance bonus.
+    phrase_bonus = 0
+
+    if (
+        normalized_query
+        and normalized_query in normalized_text
+    ):
+        phrase_bonus = 2
+
+    return term_score + phrase_bonus
 
 
 def retrieve_relevant_chunks(
