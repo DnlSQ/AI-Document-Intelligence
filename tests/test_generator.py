@@ -21,7 +21,8 @@ def test_generate_answer_uses_retrieved_context(monkeypatch):
                 "text": (
                     "VCEO collector-emitter voltage "
                     "open base -50 V"
-                )
+                ),
+                "source": "data/documents/sample.pdf"
             },
             "score": 5
         }
@@ -38,15 +39,26 @@ def test_generate_answer_uses_retrieved_context(monkeypatch):
         "The maximum collector-emitter voltage is -50 V."
     )
 
-    assert len(captured_messages) == 1
+    # Verify system and user messages are sent.
+    assert len(captured_messages) == 2
 
-    prompt = captured_messages[0]["content"]
+    assert captured_messages[0]["role"] == "system"
+    assert captured_messages[1]["role"] == "user"
 
+    system_prompt = captured_messages[0]["content"]
+    prompt = captured_messages[1]["content"]
+
+    # Verify the grounding rules are included.
+    assert "STRICT DOCUMENT GROUNDING RULES" in system_prompt
+    assert "Do not use external knowledge" in system_prompt
+
+    # Verify the user question and retrieved context.
     assert question in prompt
     assert "VCEO" in prompt
     assert "-50 V" in prompt
     assert "Page: 2" in prompt
     assert "Chunk ID: 2" in prompt
+    assert "Source: data/documents/sample.pdf" in prompt
 
 
 def test_generate_answer_with_multiple_chunks(monkeypatch):
@@ -66,7 +78,8 @@ def test_generate_answer_with_multiple_chunks(monkeypatch):
             "chunk": {
                 "chunk_id": 2,
                 "page": 2,
-                "text": "VCEO collector-emitter voltage -50 V"
+                "text": "VCEO collector-emitter voltage -50 V",
+                "source": "data/documents/sample.pdf"
             },
             "score": 5
         },
@@ -74,7 +87,8 @@ def test_generate_answer_with_multiple_chunks(monkeypatch):
             "chunk": {
                 "chunk_id": 3,
                 "page": 2,
-                "text": "IO output current -500 mA"
+                "text": "IO output current -500 mA",
+                "source": "data/documents/sample.pdf"
             },
             "score": 4
         }
@@ -91,7 +105,12 @@ def test_generate_answer_with_multiple_chunks(monkeypatch):
         "The answer is based on the provided document."
     )
 
-    prompt = captured_messages[0]["content"]
+    assert len(captured_messages) == 2
+
+    assert captured_messages[0]["role"] == "system"
+    assert captured_messages[1]["role"] == "user"
+
+    prompt = captured_messages[1]["content"]
 
     assert "Chunk ID: 2" in prompt
     assert "Chunk ID: 3" in prompt
@@ -100,5 +119,5 @@ def test_generate_answer_with_multiple_chunks(monkeypatch):
     assert "-50 V" in prompt
     assert "IO" in prompt
     assert "-500 mA" in prompt
+    assert "Source: data/documents/sample.pdf" in prompt
     assert question in prompt
-    
