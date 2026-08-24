@@ -59,7 +59,8 @@ def get_collection(client=None, name=COLLECTION_NAME):
 
     return client.get_or_create_collection(
         name=name,
-        embedding_function=None
+        embedding_function=None,
+        metadata={"hnsw:space": "cosine"}
     )
 
 
