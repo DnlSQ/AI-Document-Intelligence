@@ -38,3 +38,5 @@ models/
 # Temporary files
 tmp/
 temp/
+# Pytest
+.pytest_cache/

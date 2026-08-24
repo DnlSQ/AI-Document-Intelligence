@@ -1,5 +1,33 @@
 MODEL_NAME = "qwen2.5:7b"
 
+# Documents loaded into the knowledge base at startup. The system
+# searches across ALL of these together in a single combined
+# repository - the retriever naturally scores chunks from
+# off-topic documents at 0 (filtered out), so unrelated documents
+# don't need to be selected manually per question.
+DOCUMENT_PATHS = [
+    "data/documents/sample.pdf",
+    "data/documents/plantas.pdf",
+]
+
+# Number of chunks retrieved per question and passed to the generator.
+TOP_K_RESULTS = 3
+
+# Minimum confidence (see retriever.calculate_confidence) required
+# before generating an answer. Below this, the top match is
+# considered too weak to trust, and the grounding fallback is
+# returned directly instead of calling the LLM.
+#
+# Calibrated conservatively low based on real document testing:
+# a correct, natural-language match against generic (non-technical)
+# terms scored ~0.25 confidence. Setting the threshold well below
+# that avoids rejecting valid answers. This is a lexical signal
+# with known limits (see main.answer_question docstring) - it
+# catches clear-cut weak matches, not every possible false
+# positive. Revisit this value once more real queries have been
+# tested against the actual document.
+MIN_CONFIDENCE_THRESHOLD = 0.15
+
 SYSTEM_PROMPT = """
 You are an AI assistant specialized in technical and industrial documentation.
 

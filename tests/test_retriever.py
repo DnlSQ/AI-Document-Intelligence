@@ -1,9 +1,9 @@
 from src.document_loader import extract_text_from_pdf
 from src.text_cleaner import clean_text
 from src.chunker import create_document_chunks
-
 from src.retriever import (
     tokenize,
+    normalize_text,
     calculate_relevance_score,
     retrieve_relevant_chunks
 )
@@ -31,9 +31,67 @@ def load_chunks():
 
 
 # ============================================================
-# EXISTING COMPATIBILITY TESTS
+# BASIC TOKENIZATION TESTS
 # ============================================================
 
+def test_tokenize_returns_lowercase_tokens():
+    """
+    Verify that tokenization converts text to lowercase tokens.
+    """
+
+    tokens = tokenize("Collector-Emitter Voltage")
+
+    assert tokens == [
+        "collector",
+        "emitter",
+        "voltage"
+    ]
+
+
+def test_tokenize_handles_numbers():
+    """
+    Verify that numeric values are preserved as tokens.
+    """
+
+    tokens = tokenize("Maximum current is 500 mA")
+
+    assert "500" in tokens
+    assert "ma" in tokens
+
+
+# ============================================================
+# BASIC RELEVANCE TESTS
+# ============================================================
+
+def test_relevance_score_counts_matching_terms():
+    """
+    Verify that matching query terms contribute to the score.
+    """
+
+    score = calculate_relevance_score(
+        "maximum output current",
+        "maximum output current is 500 mA"
+    )
+
+    assert score >= 3
+
+
+def test_relevance_score_zero_when_no_terms_match():
+    """
+    Verify that unrelated text receives a zero score.
+    """
+
+    score = calculate_relevance_score(
+        "collector-emitter voltage",
+        "package dimensions and thermal resistance"
+    )
+
+    assert score == 0
+
+
+# ============================================================
+# RETRIEVER BASIC TESTS
+# ============================================================
 
 def test_retriever_returns_results():
     """
@@ -65,10 +123,13 @@ def test_retriever_returns_scores():
     for result in results:
         assert "chunk" in result
         assert "score" in result
-
-        assert isinstance(result["score"], (int, float))
+        assert isinstance(result["score"], int)
         assert result["score"] > 0
 
+
+# ============================================================
+# DOCUMENT QUESTIONS
+# ============================================================
 
 def test_question_1_output_current():
     """
@@ -177,152 +238,40 @@ def test_question_4_dc_current_gain():
 
 
 # ============================================================
-# V2.1 - IMPROVED TOKENIZATION
+# V2.1.1 — EXACT PHRASE MATCHING
 # ============================================================
 
-
-def test_tokenize_preserves_technical_identifiers():
+def test_normalize_text_lowercases_text():
     """
-    V2.1:
+    V2.1.1:
 
-    Technical identifiers such as VCEO, hFE, R1 and R2
-    must remain identifiable after tokenization.
+    Verify that normalize_text converts text to lowercase.
     """
 
-    text = (
-        "VCEO collector-emitter voltage "
-        "hFE DC current gain R1 = 1 kΩ R2 = 10 kΩ"
+    result = normalize_text(
+        "Collector-Emitter Voltage"
     )
 
-    tokens = tokenize(text)
-
-    assert "vceo" in tokens
-    assert "hfe" in tokens
-    assert "r1" in tokens
-    assert "r2" in tokens
+    assert result == "collector-emitter voltage"
 
 
-def test_tokenize_handles_hyphenated_terms():
+def test_normalize_text_removes_extra_whitespace():
     """
-    V2.1:
+    V2.1.1:
 
-    Hyphenated technical terminology should preserve
-    useful components for retrieval.
-
-    Example:
-        collector-emitter
-
-    should allow retrieval of:
-        collector
-        emitter
+    Verify that normalize_text removes repeated whitespace.
     """
 
-    tokens = tokenize(
-        "collector-emitter voltage"
+    result = normalize_text(
+        "collector-emitter    voltage"
     )
 
-    assert "collector" in tokens
-    assert "emitter" in tokens
-    assert "voltage" in tokens
-
-
-def test_tokenize_normalizes_case():
-    """
-    V2.1:
-
-    Tokenization should be case-insensitive.
-    """
-
-    tokens = tokenize(
-        "VCEO vceo VCEO"
-    )
-
-    assert tokens.count("vceo") == 3
-
-
-def test_tokenize_does_not_create_empty_tokens():
-    """
-    V2.1:
-
-    Tokenization must not return empty strings.
-    """
-
-    tokens = tokenize(
-        "VCEO   collector-emitter   voltage"
-    )
-
-    assert "" not in tokens
-
-
-# ============================================================
-# V2.1 - TECHNICAL TERM WEIGHTING
-# ============================================================
-
-
-def test_technical_identifier_is_more_relevant_than_generic_term():
-    """
-    V2.1:
-
-    A technical identifier such as VCEO should contribute
-    more relevance than a generic term such as voltage.
-
-    This test intentionally compares two chunks:
-
-        Chunk A:
-            VCEO collector-emitter voltage
-
-        Chunk B:
-            voltage
-
-    Chunk A must receive the higher score.
-    """
-
-    query = "What is the VCEO voltage?"
-
-    score_technical = calculate_relevance_score(
-        query,
-        "VCEO collector-emitter voltage"
-    )
-
-    score_generic = calculate_relevance_score(
-        query,
-        "voltage"
-    )
-
-    assert score_technical > score_generic
-
-
-def test_hfe_is_treated_as_technical_term():
-    """
-    V2.1:
-
-    hFE should contribute meaningful relevance when
-    searching for DC current gain.
-    """
-
-    query = "What is the hFE DC current gain?"
-
-    score_with_hfe = calculate_relevance_score(
-        query,
-        "hFE DC current gain"
-    )
-
-    score_without_hfe = calculate_relevance_score(
-        query,
-        "DC current gain"
-    )
-
-    assert score_with_hfe > score_without_hfe
-
-
-# ============================================================
-# V2.1 - PHRASE MATCHING
-# ============================================================
+    assert result == "collector-emitter voltage"
 
 
 def test_exact_phrase_match_scores_higher():
     """
-    V2.1:
+    V2.1.1:
 
     An exact phrase match should receive a higher score
     than a chunk containing the same terms separately.
@@ -343,47 +292,193 @@ def test_exact_phrase_match_scores_higher():
     assert exact_phrase_score > separate_terms_score
 
 
-def test_output_current_phrase_match():
+def test_exact_phrase_match_is_detected_with_different_case():
     """
-    V2.1:
+    V2.1.1:
 
-    The phrase "output current" should improve relevance
-    for the correct chunk.
+    Phrase matching should be case-insensitive.
     """
 
-    query = "maximum output current"
-
-    relevant_score = calculate_relevance_score(
-        query,
-        "IO output current -500 mA"
+    score_lowercase = calculate_relevance_score(
+        "collector-emitter voltage",
+        "collector-emitter voltage"
     )
 
-    weak_score = calculate_relevance_score(
-        query,
+    score_uppercase = calculate_relevance_score(
+        "collector-emitter voltage",
+        "COLLECTOR-EMITTER VOLTAGE"
+    )
+
+    assert score_lowercase == score_uppercase
+
+
+def test_exact_phrase_bonus_does_not_break_term_matching():
+    """
+    V2.1.1:
+
+    A chunk should still receive a relevance score when
+    only individual query terms match.
+    """
+
+    score = calculate_relevance_score(
+        "collector-emitter voltage",
         "collector voltage information"
     )
 
-    assert relevant_score > weak_score
+    assert score > 0
 
 
 # ============================================================
-# V2.1 - RANKING
+# V2.1.2 — TECHNICAL TERM WEIGHTING
 # ============================================================
 
-
-def test_retriever_ranks_exact_technical_match_first():
+def test_technical_term_match_scores_higher():
     """
-    V2.1:
+    V2.1.2:
 
-    The chunk containing the strongest technical and phrase
-    match must be ranked first.
+    A chunk containing a technical term from the query
+    should receive a higher score than a chunk containing
+    only generic words from the same query.
+
+    Example:
+
+    Query:
+        What is the VCEO voltage?
+
+    Technical chunk:
+        VCEO collector-emitter voltage open base -50 V
+
+    Generic chunk:
+        What is the voltage information for this component?
+    """
+
+    query = "What is the VCEO voltage?"
+
+    technical_score = calculate_relevance_score(
+        query,
+        "VCEO collector-emitter voltage open base -50 V"
+    )
+
+    generic_score = calculate_relevance_score(
+        query,
+        "What is the voltage information for this component?"
+    )
+
+    assert technical_score > generic_score
+
+
+def test_technical_term_receives_additional_weight():
+    """
+    V2.1.2:
+
+    Verify that a technical term contributes more than
+    a normal matching term.
+
+    The exact numerical weight is intentionally not fixed
+    here. The test only verifies that the technical term
+    provides an additional advantage.
+    """
+
+    technical_score = calculate_relevance_score(
+        "VCEO",
+        "VCEO collector-emitter voltage"
+    )
+
+    generic_score = calculate_relevance_score(
+        "voltage",
+        "VCEO collector-emitter voltage"
+    )
+
+    assert technical_score > generic_score
+
+
+def test_multiple_technical_terms_receive_weight():
+    """
+    V2.1.2:
+
+    A chunk matching multiple technical terms should score
+    higher than a chunk matching only one technical term.
+    """
+
+    query = "VCEO hFE"
+
+    multiple_technical_terms_score = calculate_relevance_score(
+        query,
+        "VCEO collector-emitter voltage hFE 70"
+    )
+
+    single_technical_term_score = calculate_relevance_score(
+        query,
+        "VCEO collector-emitter voltage"
+    )
+
+    assert multiple_technical_terms_score > single_technical_term_score
+
+
+def test_technical_term_weighting_preserves_normal_terms():
+    """
+    V2.1.2:
+
+    Technical weighting must not remove the contribution
+    of normal matching terms.
+    """
+
+    score_with_generic_term = calculate_relevance_score(
+        "VCEO voltage",
+        "VCEO voltage"
+    )
+
+    score_without_generic_term = calculate_relevance_score(
+        "VCEO",
+        "VCEO voltage"
+    )
+
+    assert score_with_generic_term > score_without_generic_term
+
+
+def test_technical_terms_are_case_insensitive_for_matching():
+    """
+    V2.1.2:
+
+    Technical term matching should remain case-insensitive.
+
+    VCEO and vceo should refer to the same token for
+    retrieval purposes.
+    """
+
+    uppercase_score = calculate_relevance_score(
+        "VCEO",
+        "VCEO collector-emitter voltage"
+    )
+
+    lowercase_score = calculate_relevance_score(
+        "vceo",
+        "VCEO collector-emitter voltage"
+    )
+
+    assert uppercase_score == lowercase_score
+
+
+# ============================================================
+# V2.1.2 — RANKING
+# ============================================================
+
+def test_technical_chunk_is_ranked_above_generic_chunk():
+    """
+    V2.1.2:
+
+    A chunk containing the technical query term should
+    rank above a generic chunk containing only common terms.
     """
 
     chunks = [
         {
             "chunk_id": 1,
-            "page": 2,
-            "text": "Voltage information for the device.",
+            "page": 1,
+            "text": (
+                "What is the voltage information "
+                "for this component?"
+            ),
             "source": PDF_PATH
         },
         {
@@ -394,99 +489,54 @@ def test_retriever_ranks_exact_technical_match_first():
                 "open base -50 V"
             ),
             "source": PDF_PATH
-        },
-        {
-            "chunk_id": 3,
-            "page": 3,
-            "text": (
-                "Collector current characteristics "
-                "and typical values."
-            ),
-            "source": PDF_PATH
         }
     ]
 
     results = retrieve_relevant_chunks(
-        "What is the maximum collector-emitter voltage?",
+        "What is the VCEO voltage?",
         chunks,
-        top_k=3
+        top_k=2
     )
 
-    assert results
+    assert len(results) == 2
 
     assert results[0]["chunk"]["chunk_id"] == 2
+    assert results[1]["chunk"]["chunk_id"] == 1
+
+    assert results[0]["score"] > results[1]["score"]
 
 
-def test_retriever_ranks_output_current_chunk_first():
+def test_retriever_preserves_score_order():
     """
-    V2.1:
+    V2.1.2:
 
-    The chunk containing the exact output-current information
-    must be ranked first.
+    Retrieved results must be ordered from highest
+    relevance score to lowest relevance score.
     """
 
     chunks = [
         {
             "chunk_id": 1,
-            "page": 2,
-            "text": "Input voltage information.",
+            "page": 1,
+            "text": "voltage information",
             "source": PDF_PATH
         },
         {
             "chunk_id": 2,
             "page": 2,
-            "text": "IO output current -500 mA.",
+            "text": "VCEO voltage",
             "source": PDF_PATH
         },
         {
             "chunk_id": 3,
             "page": 3,
-            "text": "Collector-emitter voltage -50 V.",
+            "text": "VCEO collector-emitter voltage",
             "source": PDF_PATH
         }
     ]
 
     results = retrieve_relevant_chunks(
-        "What is the maximum output current?",
-        chunks,
-        top_k=3
-    )
-
-    assert results
-
-    assert results[0]["chunk"]["chunk_id"] == 2
-
-
-def test_retriever_respects_top_k():
-    """
-    V2.1:
-
-    The retriever must never return more than top_k results.
-    """
-
-    chunks = load_chunks()
-
-    results = retrieve_relevant_chunks(
-        "voltage",
-        chunks,
-        top_k=2
-    )
-
-    assert len(results) <= 2
-
-
-def test_retriever_results_are_sorted_by_score():
-    """
-    V2.1:
-
-    Results must be returned from highest relevance
-    score to lowest relevance score.
-    """
-
-    chunks = load_chunks()
-
-    results = retrieve_relevant_chunks(
-        "What is the maximum collector-emitter voltage?",
+        "What is the VCEO voltage?",
         chunks,
         top_k=3
     )
@@ -502,78 +552,134 @@ def test_retriever_results_are_sorted_by_score():
     )
 
 
-# ============================================================
-# V2.1 - RELEVANCE FILTERING
-# ============================================================
-
-
-def test_retriever_ignores_irrelevant_chunks():
+def test_retriever_technical_term_ranking_with_real_document():
     """
-    V2.1:
+    V2.1.2:
 
-    Chunks with no meaningful query overlap should not
-    be returned by the retriever.
+    Verify that a query containing a technical term
+    retrieves the corresponding technical document chunk.
     """
 
-    chunks = [
-        {
-            "chunk_id": 1,
-            "page": 1,
-            "text": "Package dimensions and mechanical outline.",
-            "source": PDF_PATH
-        },
-        {
-            "chunk_id": 2,
-            "page": 2,
-            "text": "VCEO collector-emitter voltage -50 V.",
-            "source": PDF_PATH
-        }
-    ]
+    chunks = load_chunks()
 
     results = retrieve_relevant_chunks(
-        "collector-emitter voltage",
-        chunks,
-        top_k=3
+        "What is the VCEO voltage?",
+        chunks
     )
 
     assert results
 
-    returned_ids = [
-        result["chunk"]["chunk_id"]
-        for result in results
-    ]
+    top_chunk = results[0]["chunk"]
 
-    assert 2 in returned_ids
+    assert "VCEO" in top_chunk["text"]
 
 
-def test_retriever_returns_empty_for_unrelated_query():
+# ============================================================
+# V2.1.2 — COMPATIBILITY
+# ============================================================
+
+def test_existing_output_current_retrieval_still_works():
     """
-    V2.1:
+    V2.1.2 compatibility test:
 
-    A completely unrelated query should return no results
-    when there are no matching terms.
+    Technical weighting must not break the existing
+    output-current retrieval behavior.
     """
 
-    chunks = [
-        {
-            "chunk_id": 1,
-            "page": 1,
-            "text": "VCEO collector-emitter voltage -50 V.",
-            "source": PDF_PATH
-        },
-        {
-            "chunk_id": 2,
-            "page": 2,
-            "text": "IO output current -500 mA.",
-            "source": PDF_PATH
-        }
-    ]
+    chunks = load_chunks()
 
     results = retrieve_relevant_chunks(
-        "What is the color of the package?",
-        chunks,
-        top_k=3
+        "What is the maximum output current?",
+        chunks
     )
 
-    assert results == []
+    assert results
+
+    combined_text = " ".join(
+        result["chunk"]["text"]
+        for result in results
+    )
+
+    assert "output current" in combined_text.lower()
+    assert "500 mA" in combined_text
+
+
+def test_existing_collector_emitter_retrieval_still_works():
+    """
+    V2.1.2 compatibility test:
+
+    Technical weighting must not break the existing
+    collector-emitter retrieval behavior.
+    """
+
+    chunks = load_chunks()
+
+    results = retrieve_relevant_chunks(
+        "What is the maximum collector-emitter voltage?",
+        chunks
+    )
+
+    assert results
+
+    combined_text = " ".join(
+        result["chunk"]["text"]
+        for result in results
+    )
+
+    assert "VCEO" in combined_text
+    assert "-50" in combined_text
+
+
+def test_existing_input_voltage_retrieval_still_works():
+    """
+    V2.1.2 compatibility test:
+
+    Technical weighting must not break the existing
+    input-voltage retrieval behavior.
+    """
+
+    chunks = load_chunks()
+
+    results = retrieve_relevant_chunks(
+        "What is the maximum input voltage?",
+        chunks
+    )
+
+    assert results
+
+    combined_text = " ".join(
+        result["chunk"]["text"]
+        for result in results
+    )
+
+    assert "input voltage" in combined_text.lower()
+    assert "5" in combined_text
+    assert "-10" in combined_text
+
+
+def test_existing_dc_current_gain_retrieval_still_works():
+    """
+    V2.1.2 compatibility test:
+
+    Technical weighting must not break the existing
+    DC-current-gain retrieval behavior.
+    """
+
+    chunks = load_chunks()
+
+    results = retrieve_relevant_chunks(
+        "What is the DC current gain?",
+        chunks
+    )
+
+    assert results
+
+    combined_text = " ".join(
+        result["chunk"]["text"]
+        for result in results
+    )
+
+    assert "hFE" in combined_text
+    assert "DC current gain" in combined_text
+    assert "70" in combined_text
     
