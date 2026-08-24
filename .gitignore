@@ -40,3 +40,5 @@ tmp/
 temp/
 # Pytest
 .pytest_cache/
+# Vector store (generated, not source)
+data/vector_store/
