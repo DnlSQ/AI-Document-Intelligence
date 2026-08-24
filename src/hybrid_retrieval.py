@@ -83,7 +83,9 @@ def hybrid_retrieve(question, chunks, collection=None, top_k=3):
                 "chunk": {...},
                 "rrf_score": float,
                 "lexical_rank": int or None,
-                "semantic_rank": int or None
+                "semantic_rank": int or None,
+                "lexical_confidence": float,  # 0.0 if lexical never found it
+                "semantic_confidence": float  # 0.0 if semantic never found it
             }
         A chunk found by only one method still appears, with the
         other method's rank as None - it is not penalized for the
@@ -98,6 +100,15 @@ def hybrid_retrieve(question, chunks, collection=None, top_k=3):
 
     lexical_ranks = _rank_positions(lexical_results)
     semantic_ranks = _rank_positions(semantic_results)
+
+    lexical_confidence_by_id = {
+        result["chunk"]["chunk_id"]: result["confidence"]
+        for result in lexical_results
+    }
+    semantic_confidence_by_id = {
+        result["chunk"]["chunk_id"]: result["confidence"]
+        for result in semantic_results
+    }
 
     chunk_by_id = {}
     for result in lexical_results + semantic_results:
@@ -122,7 +133,9 @@ def hybrid_retrieve(question, chunks, collection=None, top_k=3):
             "chunk": chunk_by_id[chunk_id],
             "rrf_score": rrf_score,
             "lexical_rank": lexical_rank,
-            "semantic_rank": semantic_rank
+            "semantic_rank": semantic_rank,
+            "lexical_confidence": lexical_confidence_by_id.get(chunk_id, 0.0),
+            "semantic_confidence": semantic_confidence_by_id.get(chunk_id, 0.0)
         })
 
     fused_results.sort(
