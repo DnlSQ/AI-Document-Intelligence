@@ -2,6 +2,7 @@
 
 **RAG v1: Complete.**
 **RAG v2: Complete.**
+**RAG v3: Complete (V3.1-V3.4), wired end-to-end and validated with real Ollama runs.**
 
 | Phase | Status |
 |---|---|
@@ -10,20 +11,23 @@
 | V2.1.3 Ranking Improvements | Done (Part A: query-aware, deterministic tie-break; Part B length-normalization deferred, not needed yet) |
 | V2.1.4 Confidence Scoring | Done (recalibrated: normalized per query/chunk pair, not per raw query, to avoid penalizing natural-language questions) |
 | V2.1.5 No-Answer Detection | Done (confidence-threshold gate in main.py) |
-| V2.2 Evaluation Framework | Done (golden dataset, 100% accuracy on real document) |
-| V2.3 Retrieval Metrics | Done (Precision@K, Recall@K, MRR) |
+| V2.2 Evaluation Framework | Done (golden dataset, expanded 4->16 questions on 2026-08-25 - see below) |
+| V2.3 Retrieval Metrics | Done (Precision@K, Recall@K, MRR; generalized on 2026-08-25 to compare lexical/semantic/hybrid) |
+| Stopword-Aware Scoring | Done (2026-08-25 - closes the item deferred since V2, triggered by a real observed false positive in the V3.4 end-to-end test) |
 | Multi-document support | Done (outside formal roadmap; validated with 2 unrelated real documents) |
-| main.py RAG pipeline wiring | Done (outside formal roadmap; main.py previously bypassed retrieval entirely) |
+| main.py RAG pipeline wiring | Done (retrieval -> generation, fully wired) |
+| V3.1 Embedding Generation | Done (`src/embeddings.py`, sentence-transformers/all-MiniLM-L6-v2) |
+| V3.2 Vector Store | Done (`src/vector_store.py`, local ChromaDB, `PersistentClient`) |
+| V3.3 Semantic Search | Done (`src/semantic_search.py`, cosine similarity) |
+| V3.4 Hybrid Retrieval | Done (`src/hybrid_retrieval.py`, Reciprocal Rank Fusion; wired into `main.py` end-to-end) |
+| Comparative Retrieval Evaluation | Done (2026-08-25 - `compare_retrieval_methods` measures lexical/semantic/hybrid side by side on the same dataset) |
+| Confidence Gate Risk Check | Done (2026-08-25 - confirmed the measured hybrid ranking weakness never causes a false no-answer rejection) |
 
-92 automated tests passing, zero known regressions.
+132 automated tests passing, zero known regressions.
 
-**Known deferred item:** stopword-aware scoring. Common words
-can coincidentally inflate relevance scores. Not currently
-causing a measured accuracy problem. Revisit before starting
-RAG v3, or sooner if a real false-positive case is observed.
+**Known accepted trade-off (measured, not a bug):** unweighted Reciprocal Rank Fusion in hybrid retrieval improves ranking on paraphrased questions (MRR 0.46 vs. 0.42 for lexical alone) but costs ranking quality on literal, datasheet-vocabulary questions (MRR 0.79 vs. a perfect 1.0 for lexical alone) - which are the majority of realistic queries. A dedicated risk check confirmed this never causes the no-answer gate to reject an answerable question. Deliberately left as-is; see README.md's Known Limitations for the full writeup and candidate fixes (weighted RRF, confidence-gated fallback) if this needs revisiting later.
 
-**Next planned phase: RAG v3** (embeddings, vector store,
-semantic search), per the RAG v3 Rules section below.
+**RAG v3: complete.** Next priorities are open rather than a fixed next phase - candidates include a technician-oriented interface (currently CLI-only), growing the evaluation corpus with additional real documents, and revisiting hybrid retrieval's fusion weighting if a larger or more paraphrase-heavy corpus changes the current trade-off.
 
 ### Testing convention established during V2
 
@@ -37,7 +41,6 @@ sibling file. This lets logic be validated independently of
 environment/document availability.
 
 ---
-
 # AI Document Intelligence - Development Instructions
 
 ## Purpose

@@ -66,7 +66,7 @@ Artificial Intelligence.
 
 ## Architecture
 
-Current architecture (RAG v2, complete):
+Current architecture (RAG v3, complete):
 PDF(s)
 │
 ▼
@@ -81,32 +81,40 @@ Chunker (supports multiple documents, globally unique chunk IDs)
 ▼
 Chunk Repository
 │
-▼
-Retriever
-├── Lexical matching (term + technical-term weighting)
-├── Exact phrase matching
-├── Deterministic ranking (query-aware tie-break, chunk_id fallback)
-└── Confidence scoring (per query/chunk pair)
-│
-▼
-Top Relevant Chunks
-│
-▼
-No-Answer Gate (skips the LLM call when confidence is too low)
-│
-▼
-Generator
-│
-▼
-Qwen 2.5 7B (Ollama)
-│
-▼
+├─────────────────────────────┐
+▼                              ▼
+Lexical Retriever         Embeddings (sentence-transformers)
+├── Term + technical-term       │
+│   weighting                   ▼
+├── Exact phrase matching  Vector Store (ChromaDB, local, offline)
+├── Stopword-aware scoring       │
+└── Confidence scoring           ▼
+│                          Semantic Search (cosine similarity)
+│                                │
+└──────────────┬─────────────────┘
+               ▼
+   Hybrid Retrieval (Reciprocal Rank Fusion)
+               │
+               ▼
+   No-Answer Gate (skips the LLM call when confidence is too low)
+               │
+               ▼
+          Generator
+               │
+               ▼
+      Qwen 2.5 7B (Ollama)
+               │
+               ▼
 Grounded Answer + Source Attribution
 
 Quality is measured independently of the pipeline above via
-an **Evaluation Framework**: a golden question dataset plus
-Precision@K / Recall@K / Mean Reciprocal Rank metrics, run
-automatically as part of the test suite.
+an **Evaluation Framework**: a 16-question golden dataset
+(12 questions using the datasheet's own vocabulary, 4
+deliberately paraphrased in natural language) plus
+Precision@K / Recall@K / Mean Reciprocal Rank, computed
+**separately for lexical, semantic, and hybrid retrieval** so
+the three strategies can be compared directly instead of
+assumed.
 
 ## Technologies
 
@@ -114,7 +122,9 @@ automatically as part of the test suite.
 - Ollama
 - Qwen 2.5 7B
 - PyMuPDF
-- pytest (92 automated tests)
+- sentence-transformers (local embedding model)
+- ChromaDB (local, persistent vector store)
+- pytest (132 automated tests)
 - Git
 - PowerShell
 - Local LLM inference
@@ -123,13 +133,17 @@ automatically as part of the test suite.
 
 **RAG v1: Complete.**
 **RAG v2: Complete (V2.1 - V2.3).**
+**RAG v3: Complete (V3.1 - V3.4), wired end-to-end and validated with real Ollama runs.**
 
 The system ingests one or more PDF documents, cleans and
-chunks their text, retrieves the most relevant passages for
-a question using a weighted lexical scoring algorithm,
-estimates its own confidence in each match, and generates a
-grounded answer using a local LLM - refusing to answer when
-no document evidence supports a response.
+chunks their text, and retrieves the most relevant passages
+for a question using **hybrid retrieval**: lexical scoring
+(term/technical-term/phrase matching, stopword-aware) fused
+via Reciprocal Rank Fusion with semantic search over local
+sentence-transformer embeddings stored in a local ChromaDB
+vector store. It estimates its own confidence in each match
+and generates a grounded answer using a local LLM - refusing
+to answer when no document evidence supports a response.
 
 The system also supports searching across **multiple,
 unrelated documents at once**: each document's chunks are
@@ -138,11 +152,18 @@ naturally filtered out without manual document selection.
 This was validated with a transistor datasheet and an
 unrelated plant biology paper searched together.
 
-Retrieval quality is measured automatically, not just
-assumed: 92 automated tests currently pass with zero known
-regressions, including a golden-dataset evaluation (100%
-accuracy on real document questions) and IR-style retrieval
-metrics (Precision@K, Recall@K, Mean Reciprocal Rank).
+Retrieval quality is measured automatically and
+comparatively, not just assumed: **132 automated tests**
+currently pass with zero known regressions, including a
+golden-dataset evaluation across 16 questions (12 matching
+the document's own technical vocabulary, 4 deliberately
+paraphrased in natural language) and IR-style retrieval
+metrics (Precision@K, Recall@K, Mean Reciprocal Rank)
+computed independently for lexical, semantic, and hybrid
+retrieval. This comparison surfaced a real, measured
+trade-off - see Known Limitations below - which was
+investigated with a dedicated risk check before deciding how
+to respond to it.
 
 ## Current Progress
 
@@ -154,7 +175,8 @@ metrics (Precision@K, Recall@K, Mean Reciprocal Rank).
 - [x] Text cleaning
 - [x] Text chunking
 - [x] Lexical retrieval (term matching, technical-term
-      weighting, exact phrase matching, deterministic ranking)
+      weighting, exact phrase matching, stopword-aware
+      scoring, deterministic ranking)
 - [x] Confidence scoring
 - [x] No-answer detection (grounding fallback)
 - [x] RAG pipeline (retrieval -> generation, fully wired)
@@ -162,28 +184,42 @@ metrics (Precision@K, Recall@K, Mean Reciprocal Rank).
 - [x] Evaluation framework (golden dataset + accuracy report)
 - [x] Retrieval metrics (Precision@K, Recall@K, MRR)
 - [x] Multi-document support
-- [ ] Semantic embeddings (RAG v3)
-- [ ] Vector database (RAG v3)
-- [ ] Stopword-aware scoring (known limitation, deferred - see
-      Known Limitations below)
+- [x] Semantic embedding generation (RAG v3, V3.1)
+- [x] Vector database (RAG v3, V3.2 - ChromaDB, local)
+- [x] Semantic search (RAG v3, V3.3)
+- [x] Hybrid retrieval (RAG v3, V3.4 - Reciprocal Rank
+      Fusion, wired end-to-end into the live pipeline)
+- [x] Comparative retrieval evaluation (lexical vs. semantic
+      vs. hybrid, broken down by question style)
 - [ ] Technician-oriented interface (currently CLI-only)
 
 ## Known Limitations
 
-- **Stopword noise in lexical scoring:** common words (e.g.
-  "the", "is") can coincidentally inflate a chunk's relevance
-  score. This hasn't caused a real accuracy problem so far
-  (the golden dataset scores 100% accuracy and perfect MRR),
-  but it's a known weak point of pure lexical/keyword
-  retrieval. Deferred until either it causes an observed
-  problem, or as prep work before RAG v3 (a cleaner lexical
-  baseline makes for a fairer comparison against semantic
-  search).
-- **Confidence is a lexical signal**, not a true probability:
-  it can't perfectly distinguish a real (if generic) keyword
-  match from a coincidental one. It catches clear-cut weak
-  matches; RAG v3's semantic retrieval is the planned deeper
-  fix.
+- **Unweighted hybrid retrieval fusion is a measured
+  trade-off, not a bug:** Reciprocal Rank Fusion currently
+  weights lexical and semantic retrieval equally. Measured on
+  a 16-question golden dataset: this improves ranking on
+  paraphrased, natural-language questions (Mean Reciprocal
+  Rank 0.46 vs. 0.42 for lexical alone) but costs ranking
+  quality on literal, datasheet-vocabulary questions (MRR
+  0.79 vs. a perfect 1.0 for lexical alone) - which make up
+  the majority of realistic troubleshooting queries. A
+  dedicated risk check confirmed this never causes the system
+  to reject an answerable question (the no-answer confidence
+  gate stayed comfortably above threshold in every measured
+  case), and the generator receives every retrieved chunk as
+  context regardless of exact rank, so answer correctness is
+  governed mainly by recall, which stayed healthy throughout.
+  Left unweighted deliberately for now; candidates for a
+  future fix (weighted RRF, or falling back to hybrid only
+  when lexical confidence is low) are documented but not
+  implemented, since the measured real-world impact doesn't
+  currently justify the engineering cost.
+- **Confidence is a lexical/semantic signal, not a true
+  probability:** it can't perfectly distinguish a real (if
+  generic) match from a coincidental one. It catches
+  clear-cut weak matches; this is an inherent limit of both
+  retrieval methods, not something either alone fully solves.
 
 ## Design Philosophy
 
@@ -200,7 +236,14 @@ change to guarantee no regressions.
 
 ## Future Vision
 
-The long-term goal is to transform the project into a
+RAG v3 is now complete: lexical retrieval, semantic
+embeddings, a local vector database (ChromaDB), and hybrid
+fusion (Reciprocal Rank Fusion) are all wired end-to-end and
+validated against a real document with a comparative
+evaluation framework that measures the three retrieval
+strategies side by side rather than by eye.
+
+The long-term goal remains transforming the project into a
 technical troubleshooting assistant capable of helping
 technicians:
 
@@ -211,11 +254,13 @@ technicians:
 5. Reduce diagnosis time
 6. Improve equipment recovery time
 
-The next concrete milestone is **RAG v3**: replacing/augmenting
-lexical retrieval with semantic embeddings and a local vector
-database (FAISS or ChromaDB), enabling the system to match
-questions and documents by meaning rather than exact keyword
-overlap.
+The next concrete milestones are open rather than a fixed
+roadmap phase: a technician-oriented interface (currently
+CLI-only), growing the evaluation corpus with additional real
+documents to get a larger, more diverse sample than the
+current single datasheet, and revisiting hybrid retrieval's
+fusion weighting if a bigger or more paraphrase-heavy corpus
+changes the current measured trade-off.
 
 ## Author
 

@@ -8,6 +8,14 @@ these metrics require a SINGLE chunk to contain the full answer
 on its own. Some precision/recall numbers may look "imperfect"
 even when the system works correctly - see the notes on each
 assertion for why.
+
+Since the 4->16 dataset expansion (2026-08-25), EVALUATION_DATASET
+entries carry a "style" tag ("literal" or "paraphrase"). The
+rank-1 invariant is checked separately per style below, because
+it holds for literal questions but not for paraphrased ones - see
+rag-v3-progress.md's Comparative Retrieval Evaluation and
+Confidence Gate Risk Check for the full measurement and the
+reasoning for why that's an accepted trade-off, not a regression.
 """
 from src.document_loader import extract_text_from_pdf
 from src.text_cleaner import clean_text
@@ -36,27 +44,30 @@ def load_chunks():
     )
 
 
-def test_relevant_chunk_always_ranks_first():
+def test_relevant_chunk_always_ranks_first_for_literal_questions():
     """
-    For every question, the FIRST relevant chunk found must be
-    at rank 1 (reciprocal_rank == 1.0).
+    For every LITERAL question (matching the datasheet's own
+    vocabulary), the first relevant chunk found must be at rank 1
+    (reciprocal_rank == 1.0). This invariant has held since the
+    original 4-question dataset and still holds across all 12
+    literal questions after the 4->16 dataset expansion
+    (2026-08-25) - see rag-v3-progress.md.
 
-    Note: we deliberately do NOT assert recall_at_k == 1.0 here.
-    Because chunker.py uses chunk_overlap=150, the same answer
-    can legitimately appear in more than one overlapping chunk
-    window - and some of this dataset's expected_keywords (e.g.
-    the bare digits "5"/"-10" for input_voltage) are loose
-    substring matches that can coincidentally also appear in an
-    unrelated chunk's numbers (like "-50" or "500 mA"). Both
-    effects inflate total_relevant_in_corpus without indicating
-    any real retrieval problem - what actually matters is that
-    the retriever puts a genuinely correct chunk in the #1 spot,
-    which reciprocal_rank measures directly.
+    Paraphrased questions are checked separately, with a looser
+    bar - see test_relevant_chunk_is_found_for_paraphrased_questions
+    below. rag-v3-progress.md's "Confidence Gate Risk Check" is why
+    that looser bar is an accepted, documented trade-off rather
+    than an unnoticed regression: it confirmed a paraphrased
+    question never gets falsely rejected by the no-answer gate
+    just because its relevant chunk isn't ranked first.
     """
 
     chunks = load_chunks()
+    literal_cases = [
+        case for case in EVALUATION_DATASET if case.get("style") == "literal"
+    ]
 
-    report = calculate_retrieval_metrics(EVALUATION_DATASET, chunks, top_k=3)
+    report = calculate_retrieval_metrics(literal_cases, chunks, top_k=3)
 
     not_ranked_first = [
         result for result in report["results"]
@@ -64,7 +75,40 @@ def test_relevant_chunk_always_ranks_first():
     ]
 
     assert not not_ranked_first, (
-        f"Some questions did not rank a relevant chunk first: {not_ranked_first}"
+        f"Some literal questions did not rank a relevant chunk first: {not_ranked_first}"
+    )
+
+
+def test_relevant_chunk_is_found_for_paraphrased_questions():
+    """
+    Paraphrased questions (natural-language wording, not the
+    datasheet's own vocabulary) are held to a looser bar: the
+    relevant chunk must be FOUND somewhere in top_k
+    (reciprocal_rank > 0), not necessarily ranked first.
+
+    This is a measured, accepted trade-off (see
+    rag-v3-progress.md's Comparative Retrieval Evaluation and
+    Confidence Gate Risk Check) - lexical alone doesn't always
+    rank the right chunk #1 on paraphrases, but it's still found,
+    and that was confirmed to never cause a real answerable
+    question to be rejected by the no-answer gate.
+    """
+
+    chunks = load_chunks()
+    paraphrase_cases = [
+        case for case in EVALUATION_DATASET if case.get("style") == "paraphrase"
+    ]
+
+    report = calculate_retrieval_metrics(paraphrase_cases, chunks, top_k=3)
+
+    not_found_at_all = [
+        result for result in report["results"]
+        if result["reciprocal_rank"] == 0.0
+    ]
+
+    assert not not_found_at_all, (
+        f"Some paraphrased questions found NO relevant chunk at all "
+        f"in top_k: {not_found_at_all}"
     )
 
 
