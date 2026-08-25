@@ -44,6 +44,45 @@ def normalize_text(text):
     return re.sub(r"\s+", " ", text.lower()).strip()
 
 
+# Common grammatical words that should never contribute to a
+# relevance score on their own. Covers both languages the system
+# currently indexes (English datasheets, Spanish plant-biology
+# paper - see config.DOCUMENT_PATHS). This is a small, explicit
+# set rather than a full NLP stopword list: the goal is only to
+# stop coincidental grammatical-word overlap from manufacturing a
+# false-positive match (see the "cual es mi nombre?" case in
+# README's Known Limitations), not to filter every function word.
+STOPWORDS = frozenset({
+    # English
+    "a", "an", "the", "is", "are", "was", "were", "be", "been", "being",
+    "what", "which", "who", "whom", "this", "that", "these", "those",
+    "of", "in", "on", "at", "for", "to", "from", "by", "with", "and",
+    "or", "but", "if", "so", "do", "does", "did", "has", "have", "had",
+    "it", "its", "as", "than",
+    # Spanish
+    "el", "la", "los", "las", "un", "una", "unos", "unas",
+    "es", "son", "fue", "era", "ser", "estar",
+    "que", "cual", "cuales", "quien", "quienes",
+    "de", "en", "por", "para", "con", "y", "o", "si", "no",
+    "mi", "mis", "tu", "tus", "su", "sus",
+    "lo", "le", "les", "se", "del",
+})
+
+
+def is_stopword(token):
+    """
+    Determine whether a token is a common grammatical word that
+    should not, on its own, contribute to a relevance score.
+
+    Args:
+        token: Lowercase token to check.
+
+    Returns:
+        True if the token is a recognized stopword.
+    """
+    return token.lower() in STOPWORDS
+
+
 def is_technical_term(token):
     """
     Determine whether a token should be considered
@@ -114,6 +153,11 @@ def calculate_relevance_score(query, text):
     1. Lexical term matching.
     2. Technical term weighting.
     3. Exact phrase matching.
+
+    Stopwords are skipped entirely: they never contribute to the
+    score, even when they happen to appear in the text, since a
+    grammatical word matching is coincidence, not evidence of
+    relevance.
     """
     query_tokens = tokenize(query)
     text_tokens = set(tokenize(text))
@@ -122,6 +166,9 @@ def calculate_relevance_score(query, text):
     technical_hit = False
 
     for normalized_token in query_tokens:
+        if is_stopword(normalized_token):
+            continue
+
         if normalized_token not in text_tokens:
             continue
 
@@ -182,13 +229,14 @@ def calculate_max_possible_score(query, text):
     specific (query, chunk) pair, used as the denominator when
     normalizing scores into a confidence value.
 
-    Only query tokens that actually appear in the chunk's text
-    are counted, each at the best-case (technical) weight, plus
-    the exact phrase and technical chunk bonuses (each achievable
-    once). This avoids penalizing confidence for query tokens
-    (e.g. stopwords like "what"/"is"/"the" in a natural-language
-    question) that could never have matched this chunk in the
-    first place, no matter how relevant the chunk actually is.
+    Only query tokens that actually appear in the chunk's text,
+    AND are not stopwords, are counted, each at the best-case
+    (technical) weight, plus the exact phrase and technical chunk
+    bonuses (each achievable once). This avoids penalizing
+    confidence for query tokens (e.g. stopwords like "what"/"is"/
+    "the" in a natural-language question, or a coincidental
+    grammatical-word match) that could never have contributed to
+    the actual score in the first place.
 
     Args:
         query: User question.
@@ -202,7 +250,8 @@ def calculate_max_possible_score(query, text):
     text_tokens = set(tokenize(text))
 
     matched_tokens = [
-        token for token in query_tokens if token in text_tokens
+        token for token in query_tokens
+        if token in text_tokens and not is_stopword(token)
     ]
 
     if not matched_tokens:

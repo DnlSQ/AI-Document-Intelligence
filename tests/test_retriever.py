@@ -5,7 +5,9 @@ from src.retriever import (
     tokenize,
     normalize_text,
     calculate_relevance_score,
-    retrieve_relevant_chunks
+    calculate_confidence,
+    retrieve_relevant_chunks,
+    is_stopword
 )
 
 
@@ -682,4 +684,67 @@ def test_existing_dc_current_gain_retrieval_still_works():
     assert "hFE" in combined_text
     assert "DC current gain" in combined_text
     assert "70" in combined_text
+
+
+# ============================================================
+# STOPWORD-AWARE SCORING
+# ============================================================
+
+def test_is_stopword_recognizes_common_english_words():
+    assert is_stopword("the")
+    assert is_stopword("is")
+    assert is_stopword("what")
+
+
+def test_is_stopword_recognizes_common_spanish_words():
+    assert is_stopword("es")
+    assert is_stopword("mi")
+    assert is_stopword("cual")
+
+
+def test_is_stopword_rejects_technical_and_content_words():
+    assert not is_stopword("voltage")
+    assert not is_stopword("vceo")
+    assert not is_stopword("collector")
+
+
+def test_stopwords_do_not_contribute_to_relevance_score():
+    """
+    A query that ONLY matches via stopwords must score 0 - this
+    is the real "cual es mi nombre?" vs. a Spanish document case
+    observed during the V3.4 end-to-end test.
+    """
+    query = "cual es mi nombre"
+    text = "el tallo es la parte principal de la planta"
+
+    score = calculate_relevance_score(query, text)
+
+    assert score == 0
+
+
+def test_stopwords_do_not_change_score_of_a_real_technical_match():
+    """
+    A real technical question scores the same with or without its
+    stopwords ("what", "is", "the") - they neither add to the
+    score nor subtract from it, the meaningful terms still carry
+    it entirely.
+    """
+    query_with_stopwords = "what is the maximum collector-emitter voltage"
+    query_without_stopwords = "maximum collector-emitter voltage"
+    text = "VCEO collector-emitter voltage open base -50 V"
+
+    score_with = calculate_relevance_score(query_with_stopwords, text)
+    score_without = calculate_relevance_score(query_without_stopwords, text)
+
+    assert score_with == score_without
+
+
+def test_confidence_is_zero_when_only_stopwords_match():
+    query = "cual es mi nombre"
+    text = "el tallo es la parte principal de la planta"
+
+    score = calculate_relevance_score(query, text)
+    confidence = calculate_confidence(score, query, text)
+
+    assert confidence == 0.0
     
