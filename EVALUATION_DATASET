@@ -1,0 +1,122 @@
+EVALUATION_DATASET = [
+    # --- Original 4, unchanged content, tagged for the new breakdown ---
+    {
+        "id": "output_current",
+        "question": "What is the maximum output current of the PDTB113ZT?",
+        "expected_keywords": ["output current", "500 mA"],
+        "description": "Maximum output current",
+        "style": "literal",
+    },
+    {
+        "id": "collector_emitter_voltage",
+        "question": "What is the maximum collector-emitter voltage?",
+        "expected_keywords": ["VCEO", "-50"],
+        "description": "Maximum collector-emitter voltage",
+        "style": "literal",
+    },
+    {
+        "id": "input_voltage",
+        "question": "What is the maximum input voltage?",
+        "expected_keywords": ["input voltage", "5", "-10"],
+        "description": "Maximum input voltage",
+        "style": "literal",
+    },
+    {
+        "id": "dc_current_gain",
+        "question": "What is the DC current gain?",
+        "expected_keywords": ["hFE", "DC current gain", "70"],
+        "description": "DC current gain (hFE)",
+        "style": "literal",
+    },
+
+    # --- New literal cases, verified against the real PDF's Limiting
+    # values / Thermal characteristics / Characteristics tables ---
+    {
+        "id": "collector_base_voltage",
+        "question": "What is the maximum collector-base voltage?",
+        "expected_keywords": ["VCBO", "-50"],
+        "description": "Maximum collector-base voltage (VCBO)",
+        "style": "literal",
+    },
+    {
+        "id": "emitter_base_voltage",
+        "question": "What is the maximum emitter-base voltage?",
+        "expected_keywords": ["VEBO", "-5"],
+        "description": "Maximum emitter-base voltage (VEBO)",
+        "style": "literal",
+    },
+    {
+        "id": "total_power_dissipation",
+        "question": "What is the total power dissipation?",
+        "expected_keywords": ["Ptot", "250"],
+        "description": "Total power dissipation (Ptot)",
+        "style": "literal",
+    },
+    {
+        "id": "storage_temperature",
+        "question": "What is the storage temperature range?",
+        "expected_keywords": ["storage temperature", "-65"],
+        "description": "Storage temperature range (Tstg)",
+        "style": "literal",
+    },
+    {
+        "id": "thermal_resistance",
+        "question": "What is the thermal resistance from junction to ambient?",
+        "expected_keywords": ["thermal resistance", "500"],
+        "description": "Thermal resistance junction-to-ambient (Rth(j-a))",
+        "style": "literal",
+    },
+    {
+        "id": "saturation_voltage",
+        "question": "What is the collector-emitter saturation voltage?",
+        "expected_keywords": ["VCEsat", "-300"],
+        "description": "Collector-emitter saturation voltage (VCEsat)",
+        "style": "literal",
+    },
+    {
+        "id": "package_type",
+        "question": "What package does the PDTB113ZT come in?",
+        "expected_keywords": ["SOT23", "TO-236AB"],
+        "description": "Package type (SOT23 / TO-236AB)",
+        "style": "literal",
+    },
+    {
+        "id": "npn_complement",
+        "question": "What is the NPN complement of the PDTB113ZT?",
+        "expected_keywords": ["PDTD113ZT"],
+        "description": "NPN complement part number",
+        "style": "literal",
+    },
+
+    # --- Paraphrased cases: same underlying facts, natural-language
+    # wording far from the datasheet's own vocabulary - the terrain
+    # where semantic search is supposed to have an edge. ---
+    {
+        "id": "collector_base_voltage_paraphrase",
+        "question": "How much voltage can this transistor withstand between its collector and base before breaking down?",
+        "expected_keywords": ["VCBO", "-50"],
+        "description": "Maximum collector-base voltage, paraphrased",
+        "style": "paraphrase",
+    },
+    {
+        "id": "total_power_dissipation_paraphrase",
+        "question": "How much power can this component safely dissipate?",
+        "expected_keywords": ["Ptot", "250"],
+        "description": "Total power dissipation, paraphrased",
+        "style": "paraphrase",
+    },
+    {
+        "id": "storage_temperature_paraphrase",
+        "question": "What temperature range can this part be stored in without damage?",
+        "expected_keywords": ["storage temperature", "-65"],
+        "description": "Storage temperature range, paraphrased",
+        "style": "paraphrase",
+    },
+    {
+        "id": "saturation_voltage_paraphrase",
+        "question": "What is the voltage drop across the transistor when it's fully switched on?",
+        "expected_keywords": ["VCEsat", "-300"],
+        "description": "Collector-emitter saturation voltage, paraphrased",
+        "style": "paraphrase",
+    },
+]

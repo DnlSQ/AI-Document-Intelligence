@@ -2,7 +2,7 @@
 V2.2 Evaluation Framework.
 
 Provides a small "golden dataset" of question / expected-content
-pairs and a runner that checks the retriever's real output
+pairs and a runner that checks a retrieval method's real output
 against it, producing a structured pass/fail report.
 
 This complements (does not replace) the individual pytest
@@ -11,9 +11,17 @@ with sharp, specific, case-sensitive assertions; this framework
 gives a single summary view and makes it easy to grow the
 evaluation set over time without writing a new test function for
 every question.
+
+Also provides V2.3 Retrieval Metrics (Precision@K, Recall@K, MRR)
+and a comparative extension that runs those same metrics across
+lexical, semantic, and hybrid retrieval on the same dataset and
+corpus, so the three strategies can be measured side by side
+instead of eyeballed from separate manual runs.
 """
 
 from src.retriever import retrieve_relevant_chunks
+from src.semantic_search import semantic_search
+from src.hybrid_retrieval import hybrid_retrieve
 
 
 # Each entry describes one evaluation case:
@@ -25,38 +33,135 @@ from src.retriever import retrieve_relevant_chunks
 #       case to pass (matched case-insensitively)
 #   description: human-readable summary, for reporting
 EVALUATION_DATASET = [
+    # --- Original 4, unchanged content, tagged for the new breakdown ---
     {
         "id": "output_current",
         "question": "What is the maximum output current of the PDTB113ZT?",
         "expected_keywords": ["output current", "500 mA"],
         "description": "Maximum output current",
+        "style": "literal",
     },
     {
         "id": "collector_emitter_voltage",
         "question": "What is the maximum collector-emitter voltage?",
         "expected_keywords": ["VCEO", "-50"],
         "description": "Maximum collector-emitter voltage",
+        "style": "literal",
     },
     {
         "id": "input_voltage",
         "question": "What is the maximum input voltage?",
         "expected_keywords": ["input voltage", "5", "-10"],
         "description": "Maximum input voltage",
+        "style": "literal",
     },
     {
         "id": "dc_current_gain",
         "question": "What is the DC current gain?",
         "expected_keywords": ["hFE", "DC current gain", "70"],
         "description": "DC current gain (hFE)",
+        "style": "literal",
+    },
+
+    # --- New literal cases, verified against the real PDF's Limiting
+    # values / Thermal characteristics / Characteristics tables ---
+    {
+        "id": "collector_base_voltage",
+        "question": "What is the maximum collector-base voltage?",
+        "expected_keywords": ["VCBO", "-50"],
+        "description": "Maximum collector-base voltage (VCBO)",
+        "style": "literal",
+    },
+    {
+        "id": "emitter_base_voltage",
+        "question": "What is the maximum emitter-base voltage?",
+        "expected_keywords": ["VEBO", "-5"],
+        "description": "Maximum emitter-base voltage (VEBO)",
+        "style": "literal",
+    },
+    {
+        "id": "total_power_dissipation",
+        "question": "What is the total power dissipation?",
+        "expected_keywords": ["Ptot", "250"],
+        "description": "Total power dissipation (Ptot)",
+        "style": "literal",
+    },
+    {
+        "id": "storage_temperature",
+        "question": "What is the storage temperature range?",
+        "expected_keywords": ["storage temperature", "-65"],
+        "description": "Storage temperature range (Tstg)",
+        "style": "literal",
+    },
+    {
+        "id": "thermal_resistance",
+        "question": "What is the thermal resistance from junction to ambient?",
+        "expected_keywords": ["thermal resistance", "500"],
+        "description": "Thermal resistance junction-to-ambient (Rth(j-a))",
+        "style": "literal",
+    },
+    {
+        "id": "saturation_voltage",
+        "question": "What is the collector-emitter saturation voltage?",
+        "expected_keywords": ["VCEsat", "-300"],
+        "description": "Collector-emitter saturation voltage (VCEsat)",
+        "style": "literal",
+    },
+    {
+        "id": "package_type",
+        "question": "What package does the PDTB113ZT come in?",
+        "expected_keywords": ["SOT23", "TO-236AB"],
+        "description": "Package type (SOT23 / TO-236AB)",
+        "style": "literal",
+    },
+    {
+        "id": "npn_complement",
+        "question": "What is the NPN complement of the PDTB113ZT?",
+        "expected_keywords": ["PDTD113ZT"],
+        "description": "NPN complement part number",
+        "style": "literal",
+    },
+
+    # --- Paraphrased cases: same underlying facts, natural-language
+    # wording far from the datasheet's own vocabulary - the terrain
+    # where semantic search is supposed to have an edge. ---
+    {
+        "id": "collector_base_voltage_paraphrase",
+        "question": "How much voltage can this transistor withstand between its collector and base before breaking down?",
+        "expected_keywords": ["VCBO", "-50"],
+        "description": "Maximum collector-base voltage, paraphrased",
+        "style": "paraphrase",
+    },
+    {
+        "id": "total_power_dissipation_paraphrase",
+        "question": "How much power can this component safely dissipate?",
+        "expected_keywords": ["Ptot", "250"],
+        "description": "Total power dissipation, paraphrased",
+        "style": "paraphrase",
+    },
+    {
+        "id": "storage_temperature_paraphrase",
+        "question": "What temperature range can this part be stored in without damage?",
+        "expected_keywords": ["storage temperature", "-65"],
+        "description": "Storage temperature range, paraphrased",
+        "style": "paraphrase",
+    },
+    {
+        "id": "saturation_voltage_paraphrase",
+        "question": "What is the voltage drop across the transistor when it's fully switched on?",
+        "expected_keywords": ["VCEsat", "-300"],
+        "description": "Collector-emitter saturation voltage, paraphrased",
+        "style": "paraphrase",
     },
 ]
 
 
 def evaluate_retrieval(dataset, chunks, top_k=3):
     """
-    Run every question in the dataset through the retriever and
-    check whether all of its expected_keywords appear somewhere
-    in the combined text of the retrieved chunks.
+    Run every question in the dataset through the lexical
+    retriever and check whether all of its expected_keywords
+    appear somewhere in the combined text of the retrieved
+    chunks.
 
     This evaluates the RETRIEVAL layer only (no LLM call), so it
     can run in any environment without Ollama or a live model.
@@ -127,8 +232,8 @@ def is_relevant_chunk(case, chunk_text):
     Stricter than evaluate_retrieval's keyword check: here ALL
     expected_keywords must appear in THIS chunk alone (not
     scattered across the combined text of several chunks). This
-    matters for V2.3, since Precision/Recall/MRR need a real,
-    per-chunk ground-truth judgment - a "pass" built from
+    matters for retrieval metrics, since Precision/Recall/MRR need
+    a real, per-chunk ground-truth judgment - a "pass" built from
     keywords split across unrelated chunks isn't a chunk that
     actually answers the question.
 
@@ -145,7 +250,7 @@ def is_relevant_chunk(case, chunk_text):
     )
 
 
-def calculate_retrieval_metrics(dataset, chunks, top_k=3):
+def calculate_retrieval_metrics(dataset, chunks, top_k=3, retrieve_fn=None):
     """
     Compute standard information-retrieval quality metrics for
     each question in the dataset, plus their aggregate averages.
@@ -153,7 +258,9 @@ def calculate_retrieval_metrics(dataset, chunks, top_k=3):
     For each question:
         - total_relevant_in_corpus: how many chunks in the WHOLE
           document collection would, on their own, answer this
-          question (the ground truth for Recall).
+          question (the ground truth for Recall). This is a
+          property of the CORPUS, not of any retrieval method, so
+          it's computed the same way regardless of retrieve_fn.
         - relevant_retrieved: how many of the top_k retrieved
           chunks are actually relevant (per is_relevant_chunk).
         - precision_at_k: relevant_retrieved / top_k. Note this
@@ -171,15 +278,33 @@ def calculate_retrieval_metrics(dataset, chunks, top_k=3):
 
     Args:
         dataset: List of evaluation cases (see EVALUATION_DATASET).
-        chunks: Full document chunk repository (used both to
-            establish ground truth and to run retrieval).
+        chunks: Full document chunk repository (used to establish
+            ground truth, and also as the search space for the
+            default lexical retrieve_fn).
         top_k: Number of chunks to retrieve per question.
+        retrieve_fn: Optional callable `(question, top_k) -> list`
+            of results shaped like retrieve_relevant_chunks's
+            output (each result must have a "chunk" dict with a
+            "text" key - that's all is_relevant_chunk needs; extra
+            fields like "score"/"confidence" vs. hybrid_retrieve's
+            "rrf_score"/"lexical_rank"/etc. are irrelevant here).
+            Defaults to lexical retrieval (retrieve_relevant_chunks
+            against `chunks`). This lets the exact same
+            Precision/Recall/MRR arithmetic be reused to evaluate
+            semantic search or hybrid retrieval too (see
+            compare_retrieval_methods), instead of duplicating it
+            per method.
 
     Returns:
         dict with "results" (per-question metrics), "total",
         and the dataset-wide averages "mean_precision_at_k",
         "mean_recall_at_k", "mrr".
     """
+
+    if retrieve_fn is None:
+        retrieve_fn = lambda question, k: retrieve_relevant_chunks(
+            question, chunks, top_k=k
+        )
 
     results = []
 
@@ -188,11 +313,7 @@ def calculate_retrieval_metrics(dataset, chunks, top_k=3):
             1 for chunk in chunks if is_relevant_chunk(case, chunk["text"])
         )
 
-        retrieved = retrieve_relevant_chunks(
-            case["question"],
-            chunks,
-            top_k=top_k
-        )
+        retrieved = retrieve_fn(case["question"], top_k)
 
         relevance_flags = [
             is_relevant_chunk(case, result["chunk"]["text"])
@@ -246,6 +367,52 @@ def calculate_retrieval_metrics(dataset, chunks, top_k=3):
     }
 
 
+def compare_retrieval_methods(dataset, chunks, collection=None, top_k=3):
+    """
+    Compute Precision@K / Recall@K / MRR for lexical, semantic,
+    and hybrid retrieval on the SAME dataset and the same
+    ground-truth corpus, so the three strategies can be compared
+    on equal footing instead of eyeballed from separate manual
+    runs (see claude/rag-v3-progress.md's V3.3 manual finding that
+    prompted this - semantic winning on paraphrase, losing on
+    short technical jargon).
+
+    Args:
+        dataset: List of evaluation cases (see EVALUATION_DATASET).
+        chunks: Full document chunk repository - used both as
+            ground truth (is_relevant_chunk) and as the lexical
+            retriever's search space.
+        collection: Optional vector store collection (for tests).
+            Defaults to the real persistent collection. Passed
+            through to both semantic and hybrid retrieval.
+        top_k: Number of chunks retrieved per question, per method.
+
+    Returns:
+        dict with "lexical", "semantic", "hybrid" keys, each a
+        full report as returned by calculate_retrieval_metrics.
+    """
+    return {
+        "lexical": calculate_retrieval_metrics(
+            dataset, chunks, top_k=top_k,
+            retrieve_fn=lambda question, k: retrieve_relevant_chunks(
+                question, chunks, top_k=k
+            )
+        ),
+        "semantic": calculate_retrieval_metrics(
+            dataset, chunks, top_k=top_k,
+            retrieve_fn=lambda question, k: semantic_search(
+                question, top_k=k, collection=collection
+            )
+        ),
+        "hybrid": calculate_retrieval_metrics(
+            dataset, chunks, top_k=top_k,
+            retrieve_fn=lambda question, k: hybrid_retrieve(
+                question, chunks, collection=collection, top_k=k
+            )
+        ),
+    }
+
+
 def print_retrieval_metrics_report(report):
     """
     Print a human-readable summary of a retrieval metrics report
@@ -273,6 +440,37 @@ def print_retrieval_metrics_report(report):
     print(f"Mean Precision@K: {report['mean_precision_at_k']}")
     print(f"Mean Recall@K:    {report['mean_recall_at_k']}")
     print(f"MRR:              {report['mrr']}")
+    print("=" * 60)
+
+
+def print_comparison_report(comparison):
+    """
+    Print a human-readable side-by-side summary of a comparison
+    report produced by compare_retrieval_methods.
+
+    Args:
+        comparison: dict returned by compare_retrieval_methods
+            ("lexical" / "semantic" / "hybrid" keys, each a
+            calculate_retrieval_metrics report).
+    """
+
+    print("=" * 60)
+    print("RETRIEVAL METHOD COMPARISON")
+    print("=" * 60)
+
+    header = f"{'Method':<10} {'Precision@K':>12} {'Recall@K':>10} {'MRR':>6}"
+    print(f"\n{header}")
+    print("-" * len(header))
+
+    for method_name in ("lexical", "semantic", "hybrid"):
+        report = comparison[method_name]
+        print(
+            f"{method_name:<10} "
+            f"{report['mean_precision_at_k']:>12} "
+            f"{report['mean_recall_at_k']:>10} "
+            f"{report['mrr']:>6}"
+        )
+
     print("=" * 60)
 
 
