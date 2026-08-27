@@ -1,15 +1,51 @@
+import os
+
+
 MODEL_NAME = "qwen2.5:7b"
 
-# Documents loaded into the knowledge base at startup. The system
-# searches across ALL of these together in a single combined
-# repository - the retriever naturally scores chunks from
-# off-topic documents at 0 (filtered out), so unrelated documents
-# don't need to be selected manually per question.
-DOCUMENT_PATHS = [
-    "data/documents/sample.pdf",
-    "data/documents/plantas.pdf",
-]
+# Folder scanned for PDF documents (RAG v4.5). Replaces a
+# hardcoded list of paths: any PDF placed directly in this folder
+# (or, from RAG v5 onward, uploaded through the web interface) is
+# picked up automatically on the next full ingestion, with no code
+# change needed.
+DOCUMENTS_FOLDER = "data/documents"
+
+
+def discover_document_paths(folder=DOCUMENTS_FOLDER):
+    """
+    Scan a folder for PDF files.
+
+    Args:
+        folder: Folder to scan. Defaults to DOCUMENTS_FOLDER.
+
+    Returns:
+        Full paths to every ".pdf" file directly inside the
+        folder (case-insensitive extension match, not recursive),
+        sorted alphabetically for a deterministic ingestion order -
+        this matters because chunk_id assignment order depends on
+        it on a first run (see main.initialize_system). An empty
+        list is returned if the folder doesn't exist yet, rather
+        than raising, so a fresh checkout with no documents yet
+        doesn't crash on import.
+    """
+    if not os.path.isdir(folder):
+        return []
+
+    return sorted(
+        f"{folder.rstrip('/')}/{filename}"
+        for filename in os.listdir(folder)
+        if filename.lower().endswith(".pdf")
+    )
+
+
+# The system searches across ALL discovered documents together in
+# a single combined repository - the retriever naturally scores
+# chunks from off-topic documents at 0 (filtered out), so unrelated
+# documents don't need to be selected manually per question.
+DOCUMENT_PATHS = discover_document_paths()
+
 CHUNK_DB_PATH = "data/chunk_store.db"
+
 # Number of chunks retrieved per question and passed to the generator.
 TOP_K_RESULTS = 3
 
