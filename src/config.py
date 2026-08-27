@@ -9,7 +9,7 @@ DOCUMENT_PATHS = [
     "data/documents/sample.pdf",
     "data/documents/plantas.pdf",
 ]
-
+CHUNK_DB_PATH = "data/chunk_store.db"
 # Number of chunks retrieved per question and passed to the generator.
 TOP_K_RESULTS = 3
 
