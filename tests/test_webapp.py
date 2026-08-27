@@ -1,11 +1,11 @@
 """
-Tests for src.webapp (RAG v5.1): Flask app skeleton and the
-read-only home page.
+Tests for src.webapp (RAG v5): Flask app skeleton, the read-only
+home page (V5.1), and the ask-a-question route (V5.2).
 
-_get_state (and, through it, main.initialize_system) is mocked in
-every route test so these tests never touch the real embedding
-model, SQLite, or ChromaDB - only the routing/rendering logic
-this phase adds.
+_get_state and answer_question are mocked in every route test so
+these tests never touch the real embedding model, SQLite,
+ChromaDB, or Ollama - only the routing/rendering logic this app
+adds.
 """
 import src.webapp as webapp
 
@@ -110,4 +110,84 @@ def test_home_page_shows_empty_message_when_no_documents(monkeypatch):
 
     assert response.status_code == 200
     assert "No documents loaded yet" in response.get_data(as_text=True)
+
+
+# ---------------------------------------------------------------
+# POST /ask - question route
+# ---------------------------------------------------------------
+
+def test_ask_returns_grounded_answer(monkeypatch):
+    reset_state(monkeypatch)
+    monkeypatch.setattr(
+        webapp,
+        "_get_state",
+        lambda: {
+            "chunks": [{"chunk_id": 1, "page": 1, "text": "x", "source": "sample.pdf"}],
+            "collection": "fake-collection",
+        }
+    )
+
+    captured = {}
+
+    def fake_answer_question(question, chunks, collection=None):
+        captured["question"] = question
+        captured["chunks"] = chunks
+        captured["collection"] = collection
+        return "The maximum collector-emitter voltage is -50 V."
+
+    monkeypatch.setattr(webapp, "answer_question", fake_answer_question)
+
+    response = make_client().post(
+        "/ask",
+        data={"question": "What is the maximum collector-emitter voltage?"}
+    )
+
+    assert response.status_code == 200
+    body = response.get_data(as_text=True)
+    assert "The maximum collector-emitter voltage is -50 V." in body
+    assert "What is the maximum collector-emitter voltage?" in body
+    assert captured["question"] == "What is the maximum collector-emitter voltage?"
+    assert captured["collection"] == "fake-collection"
+
+
+def test_ask_shows_friendly_error_when_llm_unavailable(monkeypatch):
+    reset_state(monkeypatch)
+    monkeypatch.setattr(
+        webapp,
+        "_get_state",
+        lambda: {"chunks": [], "collection": "fake-collection"}
+    )
+
+    def fake_answer_question(question, chunks, collection=None):
+        raise ConnectionError("Ollama is not reachable")
+
+    monkeypatch.setattr(webapp, "answer_question", fake_answer_question)
+
+    response = make_client().post("/ask", data={"question": "Anything?"})
+
+    assert response.status_code == 200
+    body = response.get_data(as_text=True)
+    assert "unavailable" in body.lower()
+
+
+def test_ask_with_empty_question_shows_validation_message(monkeypatch):
+    reset_state(monkeypatch)
+    monkeypatch.setattr(
+        webapp,
+        "_get_state",
+        lambda: {"chunks": [], "collection": "fake-collection"}
+    )
+
+    calls = []
+    monkeypatch.setattr(
+        webapp,
+        "answer_question",
+        lambda *args, **kwargs: calls.append(1)
+    )
+
+    response = make_client().post("/ask", data={"question": "   "})
+
+    assert response.status_code == 200
+    assert "Please enter a question" in response.get_data(as_text=True)
+    assert calls == []
     

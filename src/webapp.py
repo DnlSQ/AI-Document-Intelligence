@@ -13,9 +13,9 @@ lazy-singleton pattern embeddings.py already uses for its model,
 so importing this module (e.g. in a test) never triggers a real
 ingestion pass, real embeddings, or a real SQLite/ChromaDB read.
 """
-from flask import Flask, render_template
+from flask import Flask, render_template, request
 
-from src.main import initialize_system
+from src.main import initialize_system, answer_question
 
 # templates/ lives at the project root, one level up from src/ -
 # keeps it alongside data/, tests/, docs/ rather than nested
@@ -74,6 +74,55 @@ def home():
     return render_template("index.html", documents=documents)
 
 
+@app.route("/ask", methods=["POST"])
+def ask():
+    """
+    Answer a question submitted from the home page's form.
+
+    Any failure to reach the LLM (most commonly: Ollama isn't
+    running) is caught broadly and shown as a plain-language
+    error instead of a raw stack trace - a technician using this
+    page has no reason to see a Python traceback. Caught broadly
+    (not a specific exception class from the ollama library)
+    deliberately: this is a transport-boundary safety net, not
+    retrieval/generation logic, and it shouldn't need to track
+    which exact exception type a dependency two layers down
+    happens to raise.
+    """
+    state = _get_state()
+    documents = _document_summary(state["chunks"])
+    question = request.form.get("question", "").strip()
+
+    if not question:
+        return render_template(
+            "index.html",
+            documents=documents,
+            error="Please enter a question."
+        )
+
+    try:
+        answer = answer_question(
+            question,
+            state["chunks"],
+            collection=state["collection"]
+        )
+    except Exception:
+        return render_template(
+            "index.html",
+            documents=documents,
+            question=question,
+            error="The AI assistant is unavailable right now. Make sure Ollama is running and try again."
+        )
+
+    return render_template(
+        "index.html",
+        documents=documents,
+        question=question,
+        answer=answer
+    )
+
+
 if __name__ == "__main__":
     app.run(debug=True)
+
     
