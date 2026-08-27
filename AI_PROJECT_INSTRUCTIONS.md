@@ -3,6 +3,7 @@
 **RAG v1: Complete.**
 **RAG v2: Complete.**
 **RAG v3: Complete (V3.1-V3.4), wired end-to-end and validated with real Ollama runs.**
+**RAG v4: Complete (V4.1-V4.5), persistent incremental storage layer.**
 
 | Phase | Status |
 |---|---|
@@ -22,12 +23,19 @@
 | V3.4 Hybrid Retrieval | Done (`src/hybrid_retrieval.py`, Reciprocal Rank Fusion; wired into `main.py` end-to-end) |
 | Comparative Retrieval Evaluation | Done (2026-08-25 - `compare_retrieval_methods` measures lexical/semantic/hybrid side by side on the same dataset) |
 | Confidence Gate Risk Check | Done (2026-08-25 - confirmed the measured hybrid ranking weakness never causes a false no-answer rejection) |
+| V4.1 SQLite Chunk Store | Done (2026-08-27 - `src/chunk_store.py`, persists chunk metadata so it survives restarts) |
+| V4.2 Replace-by-Source Ingestion | Done (2026-08-27 - `src/ingestion.py` `add_or_replace_document`; re-uploading a filename replaces its outdated chunks, chunk_ids never reused) |
+| V4.3 Incremental Vector Store Updates | Done (2026-08-27 - `vector_store.delete_chunks_by_source` + `ingestion.replace_document_vectors`; only the changed document is re-embedded, not the whole library) |
+| V4.4 Startup / Initialization Logic | Done (2026-08-27 - `main.initialize_system` reuses persisted data on a warm start instead of re-ingesting everything; confirmed with a real run: the embedding model isn't even loaded when data is already persisted) |
+| V4.5 Dynamic Document Discovery | Done (2026-08-27 - `config.discover_document_paths` scans the documents folder instead of a hardcoded list) |
 
-132 automated tests passing, zero known regressions.
+164 automated tests passing, zero known regressions.
 
-**Known accepted trade-off (measured, not a bug):** unweighted Reciprocal Rank Fusion in hybrid retrieval improves ranking on paraphrased questions (MRR 0.46 vs. 0.42 for lexical alone) but costs ranking quality on literal, datasheet-vocabulary questions (MRR 0.79 vs. a perfect 1.0 for lexical alone) - which are the majority of realistic queries. A dedicated risk check confirmed this never causes the no-answer gate to reject an answerable question. Deliberately left as-is; see README.md's Known Limitations for the full writeup and candidate fixes (weighted RRF, confidence-gated fallback) if this needs revisiting later.
+**Known accepted trade-off (measured, not a bug):** unweighted Reciprocal Rank Fusion in hybrid retrieval improves ranking on paraphrased questions (MRR 0.46 vs. 0.42 for lexical alone) but costs ranking quality on literal, datasheet-vocabulary questions (MRR 0.79 vs. a perfect 1.0 for lexical alone) - which are the majority of realistic queries. A dedicated risk check confirmed this never causes the no-answer gate to reject an answerable question. Deliberately left as-is; see README.md's Known Limitations for the full writeup and candidate fixes (weighted RRF, confidence-gated fallback) if this needs revisiting later. Re-run after RAG v4's storage refactor and reproduced the exact same MRR numbers across all 16 questions - confirming v4 changed nothing about retrieval behavior.
 
-**RAG v3: complete.** Next priorities are open rather than a fixed next phase - candidates include a technician-oriented interface (currently CLI-only), growing the evaluation corpus with additional real documents, and revisiting hybrid retrieval's fusion weighting if a larger or more paraphrase-heavy corpus changes the current trade-off.
+**Known accepted risk (RAG v4, documented, not solved):** chunk metadata (SQLite) and the vector store (ChromaDB) are two separate stores updated in sequence, not inside one transaction. A failure between the two writes could leave a document's metadata and vectors out of sync. Accepted for now given a single local user with no concurrent writers.
+
+**RAG v4: complete.** Next priority: **RAG v5**, a technician-facing web interface for uploading PDFs into the persistent library (replacing an outdated document by uploading a new one under the same name) and asking questions through a browser instead of the CLI. Other open, non-blocking follow-ups: growing the evaluation corpus with additional real documents, and revisiting hybrid retrieval's fusion weighting if a larger or more paraphrase-heavy corpus changes the current trade-off.
 
 ### Testing convention established during V2
 
@@ -39,6 +47,19 @@ can run without the real PDF or its external dependencies
 document) alongside `test_X_framework.py` or a synthetic
 sibling file. This lets logic be validated independently of
 environment/document availability.
+
+### Testing convention established during V4
+
+Persistence-layer tests (`chunk_store.py`, `ingestion.py`,
+`vector_store.py`'s incremental functions) use pytest's
+`tmp_path` fixture (SQLite) or a fresh in-memory ChromaDB
+`EphemeralClient` with a unique collection name (vector store)
+for isolation, instead of touching the real `data/` files.
+External pipeline steps (PDF extraction, cleaning, chunking,
+embedding generation) are mocked via `monkeypatch` at the
+point of use so these tests exercise only the orchestration
+logic being added, not steps already covered by their own
+modules' test suites.
 
 ---
 # AI Document Intelligence - Development Instructions
@@ -170,8 +191,11 @@ RAG v1
 RAG v2
 ↓
 RAG v3
+↓
+RAG v4
 
-Do NOT jump directly to embeddings or vector databases.
+Do NOT jump directly to embeddings, vector databases, or a
+user-facing interface.
 
 ### RAG v1 Rules
 
@@ -229,6 +253,38 @@ Includes:
 - Vector Store
 - Semantic Search
 - Hybrid Retrieval
+
+Must remain:
+
+- 100% local
+- 100% free
+
+### RAG v4 Rules
+
+Only start after V3 is stable (it now is - see Current Status above).
+
+Focus: persistence and incremental updates, so the system can
+hold a growing document library without paying the full
+ingestion + embedding cost again on every restart or every new
+upload.
+
+Includes:
+
+- SQLite chunk metadata store
+- Replace-by-source ingestion (same filename = replace, never
+  coexist with the outdated version)
+- Incremental vector store updates (only the changed document
+  is re-embedded)
+- Startup logic that reuses persisted data instead of always
+  rebuilding
+- Dynamic document discovery (scan the documents folder,
+  don't hardcode paths)
+
+Explicitly OUT of scope for RAG v4 (belongs to RAG v5 instead):
+
+- Any web framework, HTTP route, or HTML template
+- Saving uploaded file bytes to disk (v4's ingestion functions
+  assume the PDF path already exists on disk)
 
 Must remain:
 
@@ -409,15 +465,95 @@ Responsible only for:
 - Communication with Ollama
 - Model interaction
 
+### embeddings.py
+
+Responsible only for:
+
+- Loading the local sentence-embedding model
+- Converting text into semantic embedding vectors
+
+Must not contain:
+
+- Retrieval, ranking, or similarity search logic
+- LLM logic or prompt construction
+
+### vector_store.py
+
+Responsible only for:
+
+- Persisting chunk embeddings (and their metadata) to a local vector store
+- Basic storage operations: add, count, reset, delete-by-source
+
+Must not contain:
+
+- Embedding generation (see embeddings.py - this module only stores vectors it's given, it never computes them)
+- Similarity search / query logic (see semantic_search.py)
+
+### semantic_search.py
+
+Responsible only for:
+
+- Embedding a user question
+- Querying the vector store for the most similar chunks
+- Shaping results to match the existing retrieval result format (chunk / score / confidence), so this can be compared against - and combined with - the lexical retriever
+
+Must not contain:
+
+- Embedding generation logic (see embeddings.py)
+- Vector storage logic (see vector_store.py)
+- LLM logic or prompt construction
+
+### hybrid_retrieval.py
+
+Responsible only for:
+
+- Combining lexical retrieval (retriever.py) and semantic search (semantic_search.py) results into a single ranked list, using Reciprocal Rank Fusion (RRF)
+
+Must not contain:
+
+- Lexical scoring logic (see retriever.py)
+- Embedding generation or vector search logic (see embeddings.py, vector_store.py, semantic_search.py)
+- LLM logic or prompt construction
+
 ### evaluation.py
 
 Responsible only for:
 
 - Golden dataset definition
-- Retrieval quality measurement (accuracy, Precision@K, Recall@K, MRR)
+- Retrieval quality measurement (accuracy, Precision@K, Recall@K, MRR) - independently for lexical (retriever.py), semantic (semantic_search.py), and hybrid (hybrid_retrieval.py) retrieval
 - Report generation
 
-Must not perform retrieval logic itself (uses retriever.py) and must not call the LLM.
+Must not perform retrieval logic itself (uses the retrieval modules above) and must not call the LLM.
+
+### chunk_store.py (RAG v4)
+
+Responsible only for:
+
+- Storing chunk metadata (chunk_id, page, text, source) in SQLite
+- Loading all stored chunks back into memory
+- Deleting all chunks belonging to a given document (by source)
+- Computing the next available chunk_id
+
+Must not contain:
+
+- Retrieval, scoring, or ranking logic
+- LLM or prompt logic
+- PDF extraction, cleaning, or chunking logic
+
+### ingestion.py (RAG v4)
+
+Responsible only for:
+
+- Orchestrating extraction -> cleaning -> chunking for one document
+- Assigning chunk_ids that continue from whatever is already persisted, so multiple documents never collide
+- Removing a document's outdated chunks/vectors when it's replaced
+- Keeping the chunk repository (chunk_store.py) and the vector store (vector_store.py) in sync for that one document
+
+Must not contain:
+
+- SQL/persistence details (delegated to chunk_store.py)
+- Embedding computation itself (delegated to embeddings.py) or low-level vector storage details (delegated to vector_store.py) - this module only calls them in the right order
+- Retrieval or LLM logic
 
 ## Git Workflow
 

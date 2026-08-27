@@ -43,6 +43,8 @@ can:
 - Provide references to the original documentation
 - Evaluate and measure its own retrieval quality
 - Search across multiple, unrelated documents at once
+- Persist its knowledge base across restarts, updating it
+  incrementally as documents are added or replaced
 
 ## Real-World Background
 
@@ -66,7 +68,7 @@ Artificial Intelligence.
 
 ## Architecture
 
-Current architecture (RAG v3, complete):
+Current architecture (RAG v4, complete):
 PDF(s)
 │
 ▼
@@ -79,16 +81,16 @@ Text Cleaner
 Chunker (supports multiple documents, globally unique chunk IDs)
 │
 ▼
-Chunk Repository
+Chunk Repository (persisted in SQLite - survives restarts)
 │
 ├─────────────────────────────┐
 ▼                              ▼
 Lexical Retriever         Embeddings (sentence-transformers)
 ├── Term + technical-term       │
 │   weighting                   ▼
-├── Exact phrase matching  Vector Store (ChromaDB, local, offline)
-├── Stopword-aware scoring       │
-└── Confidence scoring           ▼
+├── Exact phrase matching  Vector Store (ChromaDB, local, offline,
+├── Stopword-aware scoring  persisted, updated incrementally)
+└── Confidence scoring           │
 │                          Semantic Search (cosine similarity)
 │                                │
 └──────────────┬─────────────────┘
@@ -124,7 +126,8 @@ assumed.
 - PyMuPDF
 - sentence-transformers (local embedding model)
 - ChromaDB (local, persistent vector store)
-- pytest (132 automated tests)
+- SQLite (persistent chunk metadata)
+- pytest (164 automated tests)
 - Git
 - PowerShell
 - Local LLM inference
@@ -134,6 +137,7 @@ assumed.
 **RAG v1: Complete.**
 **RAG v2: Complete (V2.1 - V2.3).**
 **RAG v3: Complete (V3.1 - V3.4), wired end-to-end and validated with real Ollama runs.**
+**RAG v4: Complete (V4.1 - V4.5), persistent incremental storage layer.**
 
 The system ingests one or more PDF documents, cleans and
 chunks their text, and retrieves the most relevant passages
@@ -152,8 +156,26 @@ naturally filtered out without manual document selection.
 This was validated with a transistor datasheet and an
 unrelated plant biology paper searched together.
 
+As of RAG v4, the chunk repository and vector store persist
+across restarts instead of being rebuilt from the source PDFs
+every time the system starts: chunk metadata is stored in
+SQLite (`data/chunk_store.db`) and the ChromaDB vector store
+is reused as-is whenever data already exists - confirmed with
+a real run: a warm start loads 32 previously-ingested chunks
+instantly, without even loading the embedding model. Adding
+or replacing a document only re-processes and re-embeds that
+one document, not the whole library, via a replace-by-filename
+mechanism: uploading a file under an existing name deletes its
+outdated chunks and vectors first, so an outdated document can
+never coexist with, or be mistaken for, its replacement. The
+documents folder is also scanned automatically
+(`config.discover_document_paths`) instead of relying on a
+hardcoded file list. This is the storage foundation the
+upcoming technician-facing interface (RAG v5) will be built
+on.
+
 Retrieval quality is measured automatically and
-comparatively, not just assumed: **132 automated tests**
+comparatively, not just assumed: **164 automated tests**
 currently pass with zero known regressions, including a
 golden-dataset evaluation across 16 questions (12 matching
 the document's own technical vocabulary, 4 deliberately
@@ -163,7 +185,10 @@ computed independently for lexical, semantic, and hybrid
 retrieval. This comparison surfaced a real, measured
 trade-off - see Known Limitations below - which was
 investigated with a dedicated risk check before deciding how
-to respond to it.
+to respond to it. The full comparison and the risk check were
+re-run after RAG v4's storage refactor and reproduced the
+exact same numbers, confirming the persistence work changed
+nothing about retrieval behavior.
 
 ## Current Progress
 
@@ -191,6 +216,10 @@ to respond to it.
       Fusion, wired end-to-end into the live pipeline)
 - [x] Comparative retrieval evaluation (lexical vs. semantic
       vs. hybrid, broken down by question style)
+- [x] Persistent, incremental document storage (RAG v4 -
+      SQLite chunk store, incremental vector store updates
+      per document, startup reuse of persisted data, dynamic
+      document discovery)
 - [ ] Technician-oriented interface (currently CLI-only)
 
 ## Known Limitations
@@ -220,6 +249,14 @@ to respond to it.
   generic) match from a coincidental one. It catches
   clear-cut weak matches; this is an inherent limit of both
   retrieval methods, not something either alone fully solves.
+- **Chunk metadata (SQLite) and the vector store (ChromaDB)
+  are two separate stores, updated in sequence rather than in
+  one transaction:** a failure between the two writes could
+  leave a document's metadata and its vectors out of sync.
+  Accepted for now given a single local user with no
+  concurrent writers - the same kind of measured, documented
+  trade-off as the hybrid retrieval fusion weighting above,
+  not an oversight.
 
 ## Design Philosophy
 
@@ -236,12 +273,12 @@ change to guarantee no regressions.
 
 ## Future Vision
 
-RAG v3 is now complete: lexical retrieval, semantic
-embeddings, a local vector database (ChromaDB), and hybrid
-fusion (Reciprocal Rank Fusion) are all wired end-to-end and
-validated against a real document with a comparative
-evaluation framework that measures the three retrieval
-strategies side by side rather than by eye.
+RAG v4 is now complete: chunk metadata and vector embeddings
+persist across restarts instead of being rebuilt from the
+source PDFs every time, updates are incremental per document
+rather than full-corpus rebuilds, and documents are
+discovered automatically from the documents folder instead of
+a hardcoded list.
 
 The long-term goal remains transforming the project into a
 technical troubleshooting assistant capable of helping
@@ -254,13 +291,15 @@ technicians:
 5. Reduce diagnosis time
 6. Improve equipment recovery time
 
-The next concrete milestones are open rather than a fixed
-roadmap phase: a technician-oriented interface (currently
-CLI-only), growing the evaluation corpus with additional real
-documents to get a larger, more diverse sample than the
-current single datasheet, and revisiting hybrid retrieval's
+The next concrete milestone is **RAG v5**: a technician-facing
+web interface for uploading PDFs into the persistent library
+built in v4 (replacing an outdated document by uploading a new
+one under the same name) and asking questions through a
+browser instead of the CLI. Growing the evaluation corpus with
+additional real documents, and revisiting hybrid retrieval's
 fusion weighting if a bigger or more paraphrase-heavy corpus
-changes the current measured trade-off.
+changes the current measured trade-off, remain open,
+non-blocking follow-ups.
 
 ## Author
 
