@@ -1,0 +1,29 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>AI Document Intelligence</title>
+    <style>
+        body { font-family: sans-serif; max-width: 700px; margin: 2rem auto; padding: 0 1rem; }
+        h1 { font-size: 1.4rem; }
+        table { border-collapse: collapse; width: 100%; margin-top: 1rem; }
+        th, td { text-align: left; padding: 0.4rem 0.6rem; border-bottom: 1px solid #ddd; }
+        .empty { color: #666; font-style: italic; }
+    </style>
+</head>
+<body>
+    <h1>AI Document Intelligence</h1>
+
+    <h2>Loaded documents</h2>
+    {% if documents %}
+    <table>
+        <tr><th>Document</th><th>Chunks</th></tr>
+        {% for doc in documents %}
+        <tr><td>{{ doc.source }}</td><td>{{ doc.chunk_count }}</td></tr>
+        {% endfor %}
+    </table>
+    {% else %}
+    <p class="empty">No documents loaded yet.</p>
+    {% endif %}
+</body>
+</html>
