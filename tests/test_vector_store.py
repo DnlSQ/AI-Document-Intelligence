@@ -9,13 +9,13 @@ guess at it.
 """
 import chromadb
 import uuid
-import chromadb
 
 from src.vector_store import (
     get_collection,
     add_chunks_to_store,
     get_chunk_count,
     reset_store,
+    delete_chunks_by_source,
 )
 
 
@@ -110,4 +110,39 @@ def test_reset_store_on_empty_collection_does_not_error():
     reset_store(collection=collection)
 
     assert get_chunk_count(collection=collection) == 0
+
+
+def test_delete_chunks_by_source_removes_only_matching_chunks():
+    collection = make_test_collection()
+    add_chunks_to_store(
+        [
+            make_embedded_chunk(1, source="a.pdf"),
+            make_embedded_chunk(2, source="a.pdf"),
+            make_embedded_chunk(3, source="b.pdf"),
+        ],
+        collection=collection
+    )
+
+    delete_chunks_by_source("a.pdf", collection=collection)
+
+    assert get_chunk_count(collection=collection) == 1
+    remaining = collection.get()
+    assert remaining["metadatas"][0]["source"] == "b.pdf"
+
+
+def test_delete_chunks_by_source_on_empty_collection_does_not_error():
+    collection = make_test_collection()
+
+    delete_chunks_by_source("a.pdf", collection=collection)
+
+    assert get_chunk_count(collection=collection) == 0
+
+
+def test_delete_chunks_by_source_when_source_not_found_leaves_others_untouched():
+    collection = make_test_collection()
+    add_chunks_to_store([make_embedded_chunk(1, source="a.pdf")], collection=collection)
+
+    delete_chunks_by_source("nonexistent.pdf", collection=collection)
+
+    assert get_chunk_count(collection=collection) == 1
     

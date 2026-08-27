@@ -1,17 +1,24 @@
 """
 Document-level ingestion: adding a new document to the persistent
-chunk repository, or replacing an existing one under the same name.
+chunk repository and vector store, or replacing an existing one
+under the same name.
 
 Responsible only for:
     - Orchestrating extraction -> cleaning -> chunking for ONE
       document
     - Assigning chunk_ids that continue from whatever is already
       persisted, so multiple documents never collide
-    - Removing a document's outdated chunks when it's replaced
+    - Removing a document's outdated chunks/vectors when it's
+      replaced
+    - Keeping the chunk repository (chunk_store.py) and the vector
+      store (vector_store.py) in sync for that one document
 
 Must not contain:
     - SQL/persistence details (delegated to chunk_store.py)
-    - Embedding or vector store logic (that's V4.3's responsibility)
+    - Embedding computation itself (delegated to embeddings.py)
+      or low-level vector storage details (delegated to
+      vector_store.py) - this module only calls them in the right
+      order
     - Retrieval or LLM logic
 """
 from src.document_loader import extract_text_from_pdf
@@ -21,6 +28,12 @@ from src.chunk_store import (
     delete_chunks_by_source,
     get_next_chunk_id,
     save_chunks,
+)
+from src.embeddings import generate_embeddings_for_chunks
+from src.vector_store import (
+    get_collection,
+    delete_chunks_by_source as delete_vectors_by_source,
+    add_chunks_to_store,
 )
 from src.config import CHUNK_DB_PATH
 
@@ -50,7 +63,8 @@ def add_or_replace_document(pdf_path, db_path=CHUNK_DB_PATH):
 
     Returns:
         The list of newly created chunks for this document (already
-        persisted).
+        persisted in the chunk repository - NOT yet embedded or
+        stored in the vector store, see replace_document_vectors).
     """
     source = pdf_path
 
@@ -70,3 +84,37 @@ def add_or_replace_document(pdf_path, db_path=CHUNK_DB_PATH):
     save_chunks(chunks, db_path)
 
     return chunks
+
+
+def replace_document_vectors(chunks, source, collection=None):
+    """
+    Keep the vector store in sync with a document that was just
+    added or replaced in the chunk repository.
+
+    Deletes any previously stored vectors for this source (their
+    chunk_ids may no longer match anything in `chunks` - a replace
+    assigns fresh chunk_ids, see add_or_replace_document - so a
+    plain upsert alone would leave the old vectors behind forever),
+    then embeds and stores only the given chunks. Vectors for every
+    OTHER document already in the store are left untouched - this
+    is what avoids re-embedding the whole library on every upload.
+
+    Args:
+        chunks: The chunks for THIS document only (as returned by
+            add_or_replace_document) - not the whole repository.
+        source: The document identity whose old vectors should be
+            removed before the new ones are added.
+        collection: Optional vector store collection (for tests).
+            Defaults to the real persistent collection.
+
+    Returns:
+        Number of chunks stored (see vector_store.add_chunks_to_store).
+    """
+    if collection is None:
+        collection = get_collection()
+
+    delete_vectors_by_source(source, collection=collection)
+
+    embedded_chunks = generate_embeddings_for_chunks(chunks)
+
+    return add_chunks_to_store(embedded_chunks, collection=collection)

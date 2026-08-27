@@ -136,4 +136,30 @@ def reset_store(collection=None):
 
     if existing_ids:
         collection.delete(ids=existing_ids)
-        
+
+def delete_chunks_by_source(source, collection=None):
+    """
+    Delete every vector belonging to a given document.
+
+    Used when a document is replaced by a newer upload with the
+    same name: since a replace assigns fresh chunk_ids (see
+    ingestion.add_or_replace_document), the old vectors' ids won't
+    match any new chunk, so a plain upsert alone would never
+    remove them - they'd be left in the store as permanent
+    orphans, silently retrievable even though their source text
+    was already deleted from the chunk repository.
+
+    Args:
+        source: The document identifier (e.g. its filename) whose
+            vectors should be removed.
+        collection: Optional collection to modify (for tests).
+            Defaults to the real persistent collection.
+    """
+    if collection is None:
+        collection = get_collection()
+
+    matching = collection.get(where={"source": source})
+
+    if matching["ids"]:
+        collection.delete(ids=matching["ids"])
+                
