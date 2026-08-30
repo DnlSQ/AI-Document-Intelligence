@@ -191,12 +191,13 @@ def answer_question(question, chunks, collection=None, top_k=TOP_K_RESULTS):
     directly instead) in two cases:
 
     1. Retrieval found no matching chunks at all.
-    2. Retrieval found a match, but neither method was
-       individually confident in it: the gate uses
-       max(lexical_confidence, semantic_confidence) from the top
-       result, not the RRF score itself - RRF's own scale is
-       compressed by its damping constant and isn't meaningful as
-       an absolute accept/reject threshold, only for ordering. See
+    2. Retrieval found matches, but NONE of them was individually
+       confident: the gate uses max(lexical_confidence,
+       semantic_confidence) across ALL retrieved chunks (not just
+       the top-ranked one - see RAG v5.5 note inline below), not
+       the RRF score itself - RRF's own scale is compressed by its
+       damping constant and isn't meaningful as an absolute
+       accept/reject threshold, only for ordering. See
        rag-v3-progress.md for the full reasoning.
 
     Args:
@@ -220,13 +221,22 @@ def answer_question(question, chunks, collection=None, top_k=TOP_K_RESULTS):
     if not retrieved_chunks:
         return NO_CONTEXT_ANSWER
 
-    top_result = retrieved_chunks[0]
-    top_confidence = max(
-        top_result["lexical_confidence"],
-        top_result["semantic_confidence"]
+       # RAG v5.5: confidence is checked across ALL retrieved chunks,
+    # not just retrieved_chunks[0]. The lexical safety net
+    # (hybrid_retrieval.py) can force a high-confidence chunk into
+    # this list without promoting it to rank #1 - it replaces the
+    # weakest slot on purpose, to avoid disturbing RRF's fused
+    # order. Checking only index 0 would silently discard that
+    # rescue right here, before the LLM ever sees it - confirmed
+    # with a real question (NE555N.pdf "turn off time", 2026-08-30)
+    # where the correct chunk was rescued into the list but still
+    # rejected by this gate.
+    best_confidence = max(
+        max(result["lexical_confidence"], result["semantic_confidence"])
+        for result in retrieved_chunks
     )
 
-    if top_confidence < MIN_CONFIDENCE_THRESHOLD:
+    if best_confidence < MIN_CONFIDENCE_THRESHOLD:
         return NO_CONTEXT_ANSWER
 
     return generate_answer(question, retrieved_chunks)

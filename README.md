@@ -181,7 +181,7 @@ assumed.
 - sentence-transformers (local embedding model)
 - ChromaDB (local, persistent vector store)
 - SQLite (persistent chunk metadata)
-- pytest (173 automated tests)
+- pytest (178 automated tests)
 - Git
 - PowerShell
 - Local LLM inference
@@ -192,7 +192,7 @@ assumed.
 **RAG v2: Complete (V2.1 - V2.3).**
 **RAG v3: Complete (V3.1 - V3.4), wired end-to-end and validated with real Ollama runs.**
 **RAG v4: Complete (V4.1 - V4.5), persistent incremental storage layer.**
-**RAG v5: Complete (V5.1 - V5.4), browser-based interface for technicians.**
+**RAG v5: Complete (V5.1 - V5.5), browser-based interface for technicians.**
 
 The system ingests one or more PDF documents, cleans and
 chunks their text, and retrieves the most relevant passages
@@ -235,7 +235,7 @@ datasheet): uploading it through the browser made it
 searchable immediately, with no restart needed.
 
 Retrieval quality is measured automatically and
-comparatively, not just assumed: **173 automated tests**
+comparatively, not just assumed: **178 automated tests**
 currently pass, including a golden-dataset evaluation across
 16 questions (12 matching the document's own technical
 vocabulary, 4 deliberately paraphrased in natural language)
@@ -315,25 +315,45 @@ to respond to it.
   concurrent writers - the same kind of measured, documented
   trade-off as the hybrid retrieval fusion weighting above,
   not an oversight.
-- **A real-world test with a new, previously-unseen document
-  (an NE555 timer datasheet) surfaced two retrieval misses,
-  currently under investigation, not yet resolved:** a
-  question about a value that lives inside a multi-column
-  table returned "I don't have enough information" even
-  though the value is present in the document - likely
-  because the chunker splits text by character count without
-  understanding tables, so a value and its label can end up in
-  different chunks, with neither one containing the complete
-  fact. A second question returned an unrelated marketing
-  bullet instead of the correct numeric specification - likely
-  because it tied in lexical score with the chunk that actually
-  had the answer, and the deterministic tie-break (lowest
-  chunk ID wins) happened to favor the wrong one. Both
-  hypotheses come from reading the actual retrieval code, not
-  guesswork, but are being confirmed with a dedicated
-  diagnostic script before any fix is proposed - consistent
-  with this project's "evidence, not assumptions" approach to
-  every previous bug.
+- **Resolved (RAG v5.5): two retrieval misses found via a
+  real, previously-unseen document (NE555 timer datasheet).**
+  Root cause, confirmed with a diagnostic script rather than
+  guessed: the correct chunk was the single best lexical match
+  in both cases, but Reciprocal Rank Fusion still excluded it,
+  for two distinct reasons. (1) It was invisible to semantic
+  search entirely, so RRF's rank-based fusion scored it below
+  chunks found by both methods. Fixed with a "lexical safety
+  net": a chunk lexical retrieval is highly confident about
+  (confidence >= 0.35) is force-included even when semantic
+  search missed it. (2) A live browser test then exposed a
+  second gap: two chunks tied exactly on lexical score - one a
+  feature-list bullet only naming a spec, the other the data
+  table entry actually holding its value - and the retriever's
+  tie-break (lowest chunk ID wins) happened to favor the
+  bullet. The safety net was generalized to check every chunk
+  tied for the best score, not just the first. Both fixes
+  validated against the original 16-question golden dataset in
+  isolation: identical Precision/Recall/MRR to the previously
+  documented baseline in every case, confirming zero
+  regression.
+- **New limitation surfaced by the same investigation: PDF
+  table extraction loses column structure.** After both fixes
+  above, one of the two original questions ("turn off time")
+  still returns the no-answer fallback - but now for a
+  different, deeper reason. The correct chunk IS retrieved and
+  reaches the LLM; the model correctly declines rather than
+  guess, because the datasheet's multi-column table was
+  extracted as a flat sequence with no column alignment, e.g.:
+  `tr / tf / Output rise time / Output fall time / 100 / 100 /
+  200 / 200 / 100 / 100 / 300 / 300 / ns / toff / Turn off time
+  (5) (Vreset = VCC) / 0.5 / 0.5 / µs`. A human reading this
+  cold would also struggle to confidently match each number to
+  its symbol. This is a `document_loader.py`/`chunker.py`
+  table-handling gap, not a retrieval or generation bug - the
+  grounding rule ("never guess") is working exactly as
+  intended. Candidate fix: reconstruct table rows into an
+  explicit `Symbol: X | Parameter: Y | Value: Z` format during
+  ingestion, before chunking.
 
 ## Design Philosophy
 
@@ -371,16 +391,18 @@ technicians:
 5. Reduce diagnosis time
 6. Improve equipment recovery time
 
-The next concrete milestone is investigating and addressing
-the two retrieval misses documented above under Known
-Limitations, using the NE555 datasheet as a new, real test
-case - likely improvements to how the chunker handles
-tabular data, and to how the retriever breaks ties between
-chunks with an identical lexical score. Growing the evaluation
-corpus with additional real documents, and a fully
-standalone executable (no separate Python installation
-required, most likely via PyInstaller) remain open,
-non-blocking follow-ups.
+The next concrete milestone is table-aware extraction (see
+Known Limitations above) - the last open gap from the NE555
+real-document test, now that both retrieval misses are fixed.
+Growing the evaluation corpus with additional real documents
+(including NE555N.pdf-specific golden questions, so this exact
+bug class gets automated regression coverage instead of
+depending on manual smoke tests), revisiting hybrid
+retrieval's fusion weighting and tie-break signals more
+broadly now that two separate ties surfaced in one
+investigation, and a fully standalone executable (no separate
+Python installation required, most likely via PyInstaller)
+remain open, non-blocking follow-ups.
 
 ## Author
 

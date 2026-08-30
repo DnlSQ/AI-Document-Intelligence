@@ -351,6 +351,68 @@ def test_answer_question_proceeds_when_confidence_meets_threshold_exactly(monkey
     assert answer == "An answer."
     assert len(generate_calls) == 1
 
+def test_answer_question_proceeds_when_a_non_top_ranked_result_is_confident(monkeypatch):
+    """
+    RAG v5.5: the lexical safety net (hybrid_retrieval.py) can force
+    a high-confidence chunk into the returned list WITHOUT promoting
+    it to rank #1 - it replaces the weakest slot, not the top one
+    (see _apply_lexical_safety_net). The no-answer gate must
+    therefore check confidence across ALL returned chunks, not just
+    retrieved_chunks[0], or a safety-net rescue gets silently
+    discarded here before the LLM ever sees it - exactly what
+    happened with the real NE555N.pdf "turn off time" question
+    (confirmed live, 2026-08-30).
+    """
+
+    generate_calls = []
+
+    def fake_hybrid_retrieve(question, chunks_arg, collection=None, top_k=3):
+        weak_chunk = {"chunk_id": 1, "page": 1, "text": "barely related", "source": "sample.pdf"}
+        other_chunk = {"chunk_id": 2, "page": 1, "text": "also weak", "source": "sample.pdf"}
+        rescued_chunk = {"chunk_id": 3, "page": 4, "text": "toff turn off time 0.5 us", "source": "sample.pdf"}
+        return [
+            {
+                "chunk": weak_chunk,
+                "rrf_score": 0.02,
+                "lexical_rank": 4,
+                "semantic_rank": 2,
+                "lexical_confidence": MIN_CONFIDENCE_THRESHOLD - 0.05,
+                "semantic_confidence": MIN_CONFIDENCE_THRESHOLD - 0.05,
+            },
+            {
+                "chunk": other_chunk,
+                "rrf_score": 0.018,
+                "lexical_rank": 5,
+                "semantic_rank": 3,
+                "lexical_confidence": MIN_CONFIDENCE_THRESHOLD - 0.1,
+                "semantic_confidence": MIN_CONFIDENCE_THRESHOLD - 0.1,
+            },
+            {
+                # Placed LAST, exactly like the real lexical safety
+                # net does - not promoted to rank #1.
+                "chunk": rescued_chunk,
+                "rrf_score": 0.01,
+                "lexical_rank": 1,
+                "semantic_rank": None,
+                "lexical_confidence": 0.47,
+                "semantic_confidence": 0.0,
+            },
+        ]
+
+    def fake_generate_answer(question, retrieved_chunks):
+        generate_calls.append((question, retrieved_chunks))
+        return "The turn off time is 0.5 us."
+
+    monkeypatch.setattr("src.main.hybrid_retrieve", fake_hybrid_retrieve)
+    monkeypatch.setattr("src.main.generate_answer", fake_generate_answer)
+
+    answer = answer_question(
+        "What is the turn off time?",
+        chunks=[{"chunk_id": 1, "page": 1, "text": "x", "source": "s"}]
+    )
+
+    assert answer == "The turn off time is 0.5 us."
+    assert len(generate_calls) == 1
 
 def test_answer_question_uses_real_hybrid_retrieval_end_to_end(monkeypatch):
     """
@@ -465,4 +527,5 @@ def test_build_vector_store_resets_before_writing(monkeypatch):
     assert get_chunk_count(collection=collection) == 1
     result = collection.get(ids=["1"])
     assert result["documents"][0] == "fresh"
+
     
