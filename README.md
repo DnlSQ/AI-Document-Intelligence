@@ -45,6 +45,8 @@ can:
 - Search across multiple, unrelated documents at once
 - Persist its knowledge base across restarts, updating it
   incrementally as documents are added or replaced
+- Let a technician upload documents and ask questions from
+  a browser, with no command line required
 
 ## Real-World Background
 
@@ -66,48 +68,99 @@ AI Document Intelligence is an evolution of this experience,
 combining industrial troubleshooting, data analysis and
 Artificial Intelligence.
 
+## Getting Started (for end users)
+
+AI Document Intelligence runs entirely on your own computer.
+No account, no cloud service, and no internet connection is
+required to use it once set up - your documents never leave
+your machine.
+
+### Requirements (one-time, before first use)
+
+1. **Python 3.10+** - https://www.python.org/downloads/
+   (make sure "Add python.exe to PATH" is checked during
+   installation)
+2. **Ollama** - https://ollama.com/download
+3. **The Qwen2.5:7B model**, pulled once through Ollama:
+ollama pull qwen2.5:7b
+
+These three are separate programs, not something this
+project can install for you - the same is true of any local
+LLM tool (LM Studio, GPT4All, Ollama itself), not a
+limitation specific to this project.
+
+### Running the app
+
+1. Download or clone this repository.
+2. Double-click `start_app.bat` (or a shortcut to it - right
+   click the file, "Create shortcut", and move that shortcut
+   wherever is convenient).
+   - The first time, it creates a Python virtual environment
+     and installs every required library automatically. This
+     only happens once and can take a few minutes.
+   - Every time after that, it starts in seconds.
+3. Your browser opens automatically at
+   `http://127.0.0.1:5000`, ready to ask questions and
+   upload documents. Closing the console window that opens
+   alongside it stops the app.
+
 ## Architecture
 
-Current architecture (RAG v4, complete):
-PDF(s)
+Current architecture (RAG v5):
+Browser (technician)
+│
+├── Upload / replace a document
+│ │
+│ ▼
+│ PDF
+│ │
+│ ▼
+│ Document Loader
+│ │
+│ ▼
+│ Text Cleaner
+│ │
+│ ▼
+│ Chunker (per document, globally unique chunk IDs)
+│ │
+│ ▼
+│ Chunk Repository (SQLite) + Vector Store (ChromaDB)
+│ updated incrementally - replacing a document by
+│ filename deletes its old chunks/vectors first
+│
+└── Ask a question
 │
 ▼
-Document Loader
+Chunk Repository (persisted, survives restarts)
+│
+┌───────────┴────────────┐
+▼ ▼
+Lexical Retriever Embeddings (sentence-transformers)
+├── Term + technical- │
+│ term weighting ▼
+├── Exact phrase Vector Store (ChromaDB, local, offline)
+│ matching │
+└── Confidence scoring Semantic Search (cosine similarity)
+│ │
+└──────────┬───────────┘
+▼
+Hybrid Retrieval (Reciprocal Rank Fusion)
 │
 ▼
-Text Cleaner
+No-Answer Gate (skips the LLM call when confidence
+is too low)
 │
 ▼
-Chunker (supports multiple documents, globally unique chunk IDs)
+Generator
 │
 ▼
-Chunk Repository (persisted in SQLite - survives restarts)
+Qwen 2.5 7B (Ollama)
 │
-├─────────────────────────────┐
-▼                              ▼
-Lexical Retriever         Embeddings (sentence-transformers)
-├── Term + technical-term       │
-│   weighting                   ▼
-├── Exact phrase matching  Vector Store (ChromaDB, local, offline,
-├── Stopword-aware scoring  persisted, updated incrementally)
-└── Confidence scoring           │
-│                          Semantic Search (cosine similarity)
-│                                │
-└──────────────┬─────────────────┘
-               ▼
-   Hybrid Retrieval (Reciprocal Rank Fusion)
-               │
-               ▼
-   No-Answer Gate (skips the LLM call when confidence is too low)
-               │
-               ▼
-          Generator
-               │
-               ▼
-      Qwen 2.5 7B (Ollama)
-               │
-               ▼
+▼
 Grounded Answer + Source Attribution
+│
+▼
+Rendered back in the browser
 
 Quality is measured independently of the pipeline above via
 an **Evaluation Framework**: a 16-question golden dataset
@@ -121,13 +174,14 @@ assumed.
 ## Technologies
 
 - Python
+- Flask (local web interface)
 - Ollama
 - Qwen 2.5 7B
 - PyMuPDF
 - sentence-transformers (local embedding model)
 - ChromaDB (local, persistent vector store)
 - SQLite (persistent chunk metadata)
-- pytest (164 automated tests)
+- pytest (173 automated tests)
 - Git
 - PowerShell
 - Local LLM inference
@@ -138,6 +192,7 @@ assumed.
 **RAG v2: Complete (V2.1 - V2.3).**
 **RAG v3: Complete (V3.1 - V3.4), wired end-to-end and validated with real Ollama runs.**
 **RAG v4: Complete (V4.1 - V4.5), persistent incremental storage layer.**
+**RAG v5: Complete (V5.1 - V5.4), browser-based interface for technicians.**
 
 The system ingests one or more PDF documents, cleans and
 chunks their text, and retrieves the most relevant passages
@@ -153,42 +208,43 @@ The system also supports searching across **multiple,
 unrelated documents at once**: each document's chunks are
 scored independently, so an irrelevant document's content is
 naturally filtered out without manual document selection.
-This was validated with a transistor datasheet and an
-unrelated plant biology paper searched together.
 
 As of RAG v4, the chunk repository and vector store persist
 across restarts instead of being rebuilt from the source PDFs
 every time the system starts: chunk metadata is stored in
 SQLite (`data/chunk_store.db`) and the ChromaDB vector store
-is reused as-is whenever data already exists - confirmed with
-a real run: a warm start loads 32 previously-ingested chunks
-instantly, without even loading the embedding model. Adding
-or replacing a document only re-processes and re-embeds that
+is reused as-is whenever data already exists. Adding or
+replacing a document only re-processes and re-embeds that
 one document, not the whole library, via a replace-by-filename
 mechanism: uploading a file under an existing name deletes its
 outdated chunks and vectors first, so an outdated document can
-never coexist with, or be mistaken for, its replacement. The
-documents folder is also scanned automatically
-(`config.discover_document_paths`) instead of relying on a
-hardcoded file list. This is the storage foundation the
-upcoming technician-facing interface (RAG v5) will be built
-on.
+never coexist with, or be mistaken for, its replacement.
+
+As of RAG v5, all of this is reachable from a browser instead
+of the command line: a technician can ask a question, see
+which documents are currently loaded, and upload a new PDF (or
+replace an existing one by uploading it again under the same
+name) without touching a terminal. A one-click launcher
+(`start_app.bat`) sets up the Python environment automatically
+on first run and opens the browser for every run after that -
+Python and Ollama itself still need to be installed once, the
+same as any local-LLM tool, but no Python knowledge or command
+typing is required beyond that. This was validated end-to-end
+with a real, previously-unseen document (an NE555 timer
+datasheet): uploading it through the browser made it
+searchable immediately, with no restart needed.
 
 Retrieval quality is measured automatically and
-comparatively, not just assumed: **164 automated tests**
-currently pass with zero known regressions, including a
-golden-dataset evaluation across 16 questions (12 matching
-the document's own technical vocabulary, 4 deliberately
-paraphrased in natural language) and IR-style retrieval
-metrics (Precision@K, Recall@K, Mean Reciprocal Rank)
-computed independently for lexical, semantic, and hybrid
-retrieval. This comparison surfaced a real, measured
+comparatively, not just assumed: **173 automated tests**
+currently pass, including a golden-dataset evaluation across
+16 questions (12 matching the document's own technical
+vocabulary, 4 deliberately paraphrased in natural language)
+and IR-style retrieval metrics (Precision@K, Recall@K, Mean
+Reciprocal Rank) computed independently for lexical, semantic,
+and hybrid retrieval. This comparison surfaced a real, measured
 trade-off - see Known Limitations below - which was
 investigated with a dedicated risk check before deciding how
-to respond to it. The full comparison and the risk check were
-re-run after RAG v4's storage refactor and reproduced the
-exact same numbers, confirming the persistence work changed
-nothing about retrieval behavior.
+to respond to it.
 
 ## Current Progress
 
@@ -220,7 +276,9 @@ nothing about retrieval behavior.
       SQLite chunk store, incremental vector store updates
       per document, startup reuse of persisted data, dynamic
       document discovery)
-- [ ] Technician-oriented interface (currently CLI-only)
+- [x] Technician-oriented interface (RAG v5 - browser-based:
+      ask questions, view loaded documents, upload or replace
+      documents, one-click launcher script)
 
 ## Known Limitations
 
@@ -257,6 +315,25 @@ nothing about retrieval behavior.
   concurrent writers - the same kind of measured, documented
   trade-off as the hybrid retrieval fusion weighting above,
   not an oversight.
+- **A real-world test with a new, previously-unseen document
+  (an NE555 timer datasheet) surfaced two retrieval misses,
+  currently under investigation, not yet resolved:** a
+  question about a value that lives inside a multi-column
+  table returned "I don't have enough information" even
+  though the value is present in the document - likely
+  because the chunker splits text by character count without
+  understanding tables, so a value and its label can end up in
+  different chunks, with neither one containing the complete
+  fact. A second question returned an unrelated marketing
+  bullet instead of the correct numeric specification - likely
+  because it tied in lexical score with the chunk that actually
+  had the answer, and the deterministic tie-break (lowest
+  chunk ID wins) happened to favor the wrong one. Both
+  hypotheses come from reading the actual retrieval code, not
+  guesswork, but are being confirmed with a dedicated
+  diagnostic script before any fix is proposed - consistent
+  with this project's "evidence, not assumptions" approach to
+  every previous bug.
 
 ## Design Philosophy
 
@@ -269,16 +346,19 @@ applications can be developed with local models.
 
 Every feature is developed test-first: tests are written
 before implementation, and the full suite is run after every
-change to guarantee no regressions.
+change to guarantee no regressions. The one deliberate
+exception is `start_app.bat` (RAG v5.4): it is an operating
+system launcher script, not Python logic, so there is no
+meaningful way to cover it with `pytest` - it was instead
+verified manually, once for a first-time setup and once for
+a normal run, exactly as documented in its own section above.
 
 ## Future Vision
 
-RAG v4 is now complete: chunk metadata and vector embeddings
-persist across restarts instead of being rebuilt from the
-source PDFs every time, updates are incremental per document
-rather than full-corpus rebuilds, and documents are
-discovered automatically from the documents folder instead of
-a hardcoded list.
+RAG v5 is now complete: a technician can ask questions,
+upload or replace documents, and start the whole system with
+a single double-click, with no command line involved beyond
+a one-time Python/Ollama setup shared by any local-LLM tool.
 
 The long-term goal remains transforming the project into a
 technical troubleshooting assistant capable of helping
@@ -291,14 +371,15 @@ technicians:
 5. Reduce diagnosis time
 6. Improve equipment recovery time
 
-The next concrete milestone is **RAG v5**: a technician-facing
-web interface for uploading PDFs into the persistent library
-built in v4 (replacing an outdated document by uploading a new
-one under the same name) and asking questions through a
-browser instead of the CLI. Growing the evaluation corpus with
-additional real documents, and revisiting hybrid retrieval's
-fusion weighting if a bigger or more paraphrase-heavy corpus
-changes the current measured trade-off, remain open,
+The next concrete milestone is investigating and addressing
+the two retrieval misses documented above under Known
+Limitations, using the NE555 datasheet as a new, real test
+case - likely improvements to how the chunker handles
+tabular data, and to how the retriever breaks ties between
+chunks with an identical lexical score. Growing the evaluation
+corpus with additional real documents, and a fully
+standalone executable (no separate Python installation
+required, most likely via PyInstaller) remain open,
 non-blocking follow-ups.
 
 ## Author
@@ -311,3 +392,4 @@ Electronics Technician
 www.linkedin.com/in/daniel-felipe-solano-quiros
 
 Costa Rica
+

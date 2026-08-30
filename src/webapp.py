@@ -1,65 +1,41 @@
 """
 Flask web interface (RAG v5).
 
-Responsible only for:
-    - HTTP routes: rendering pages, handling form submissions
-    - Wiring requests to the existing RAG pipeline (main.py,
-      ingestion.py) - it must not reimplement any retrieval,
-      generation, or persistence logic itself
-
-State (chunks + vector store collection) is loaded lazily on
-first use via _get_state(), not at import time - mirrors the
-lazy-singleton pattern embeddings.py already uses for its model,
-so importing this module (e.g. in a test) never triggers a real
-ingestion pass, real embeddings, or a real SQLite/ChromaDB read.
+Exposes the existing RAG pipeline (src.main) through a small local
+web UI: a home page listing loaded documents, a form to ask
+questions, and a form to upload/replace documents in the persistent
+library built in RAG v4.
 """
+import os
+import threading
+
 from flask import Flask, render_template, request
+from werkzeug.utils import secure_filename
 
 from src.main import initialize_system, answer_question
+from src.ingestion import add_or_replace_document, replace_document_vectors
+from src.chunk_store import load_all_chunks
+from src.config import DOCUMENTS_FOLDER, CHUNK_DB_PATH
 
-# templates/ lives at the project root, one level up from src/ -
-# keeps it alongside data/, tests/, docs/ rather than nested
-# inside src/, matching the project's existing top-level layout.
 app = Flask(__name__, template_folder="../templates")
 
 _state = None
+_state_lock = threading.Lock()
 
 
 def _get_state():
-    """
-    Return the shared (chunks, collection) state, initializing it
-    on first use via main.initialize_system - which itself reuses
-    persisted data when available (see RAG v4) instead of always
-    reprocessing every PDF from scratch.
-    """
     global _state
-
     if _state is None:
         chunks, collection = initialize_system()
         _state = {"chunks": chunks, "collection": collection}
-
     return _state
 
 
 def _document_summary(chunks):
-    """
-    Summarize the currently loaded chunks into a per-document
-    view for the home page: one row per distinct source, with how
-    many chunks it contributed.
-
-    Args:
-        chunks: List of chunk dicts (each with a "source" key).
-
-    Returns:
-        List of {"source": ..., "chunk_count": ...} dicts, sorted
-        by source name for a stable display order.
-    """
     counts = {}
-
     for chunk in chunks:
         source = chunk["source"]
         counts[source] = counts.get(source, 0) + 1
-
     return [
         {"source": source, "chunk_count": count}
         for source, count in sorted(counts.items())
@@ -70,59 +46,72 @@ def _document_summary(chunks):
 def home():
     state = _get_state()
     documents = _document_summary(state["chunks"])
-
     return render_template("index.html", documents=documents)
 
 
 @app.route("/ask", methods=["POST"])
 def ask():
-    """
-    Answer a question submitted from the home page's form.
-
-    Any failure to reach the LLM (most commonly: Ollama isn't
-    running) is caught broadly and shown as a plain-language
-    error instead of a raw stack trace - a technician using this
-    page has no reason to see a Python traceback. Caught broadly
-    (not a specific exception class from the ollama library)
-    deliberately: this is a transport-boundary safety net, not
-    retrieval/generation logic, and it shouldn't need to track
-    which exact exception type a dependency two layers down
-    happens to raise.
-    """
     state = _get_state()
     documents = _document_summary(state["chunks"])
     question = request.form.get("question", "").strip()
-
     if not question:
-        return render_template(
-            "index.html",
-            documents=documents,
-            error="Please enter a question."
-        )
-
+        return render_template("index.html", documents=documents, error="Please enter a question.")
     try:
-        answer = answer_question(
-            question,
-            state["chunks"],
-            collection=state["collection"]
-        )
+        answer = answer_question(question, state["chunks"], collection=state["collection"])
     except Exception:
         return render_template(
-            "index.html",
-            documents=documents,
-            question=question,
+            "index.html", documents=documents, question=question,
             error="The AI assistant is unavailable right now. Make sure Ollama is running and try again."
+        )
+    return render_template("index.html", documents=documents, question=question, answer=answer)
+
+
+@app.route("/upload", methods=["POST"])
+def upload():
+    state = _get_state()
+    documents = _document_summary(state["chunks"])
+
+    uploaded_file = request.files.get("document")
+    if uploaded_file is None or uploaded_file.filename == "":
+        return render_template(
+            "index.html", documents=documents,
+            upload_error="Please choose a file to upload."
+        )
+
+    filename = secure_filename(uploaded_file.filename)
+    if not filename.lower().endswith(".pdf"):
+        return render_template(
+            "index.html", documents=documents,
+            upload_error="Please upload a PDF file."
+        )
+
+    os.makedirs(DOCUMENTS_FOLDER, exist_ok=True)
+    saved_path = f"{DOCUMENTS_FOLDER.rstrip('/')}/{filename}"
+    uploaded_file.save(saved_path)
+
+    chunks = add_or_replace_document(saved_path)
+    replace_document_vectors(chunks, saved_path, collection=state["collection"])
+
+    with _state_lock:
+        state["chunks"] = load_all_chunks(CHUNK_DB_PATH)
+
+    documents = _document_summary(state["chunks"])
+
+    if not chunks:
+        return render_template(
+            "index.html", documents=documents,
+            upload_warning=(
+                f"'{filename}' was uploaded, but no text could be extracted from it "
+                "(it may be a scanned or image-only PDF)."
+            )
         )
 
     return render_template(
-        "index.html",
-        documents=documents,
-        question=question,
-        answer=answer
+        "index.html", documents=documents,
+        upload_message=f"'{filename}' was uploaded and is ready to use."
     )
 
 
 if __name__ == "__main__":
     app.run(debug=True)
-
     

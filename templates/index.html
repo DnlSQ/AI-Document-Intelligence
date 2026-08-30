@@ -11,9 +11,12 @@
         .empty { color: #666; font-style: italic; }
         form.ask-form { margin-top: 1.5rem; display: flex; gap: 0.5rem; }
         form.ask-form input[type="text"] { flex: 1; padding: 0.4rem; }
+        form.upload-form { margin-top: 1rem; display: flex; gap: 0.5rem; align-items: center; }
         .answer-box { margin-top: 1rem; padding: 0.8rem; background: #f4f4f4; border-radius: 4px; }
         .answer-box .question { font-weight: bold; margin-bottom: 0.4rem; }
         .error-box { margin-top: 1rem; padding: 0.8rem; background: #fdecea; color: #7a1f1f; border-radius: 4px; }
+        .warning-box { margin-top: 1rem; padding: 0.8rem; background: #fff4e0; color: #7a5b1f; border-radius: 4px; }
+        .success-box { margin-top: 1rem; padding: 0.8rem; background: #e8f5e9; color: #1f7a34; border-radius: 4px; }
     </style>
 </head>
 <body>
@@ -44,6 +47,20 @@
     </table>
     {% else %}
     <p class="empty">No documents loaded yet.</p>
+    {% endif %}
+
+    <h2>Upload / replace a document</h2>
+    <form class="upload-form" method="post" action="/upload" enctype="multipart/form-data">
+        <input type="file" name="document" accept=".pdf">
+        <button type="submit">Upload</button>
+    </form>
+
+    {% if upload_error %}
+    <div class="error-box">{{ upload_error }}</div>
+    {% elif upload_warning %}
+    <div class="warning-box">{{ upload_warning }}</div>
+    {% elif upload_message %}
+    <div class="success-box">{{ upload_message }}</div>
     {% endif %}
 </body>
 </html>

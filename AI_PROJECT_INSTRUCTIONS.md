@@ -4,6 +4,7 @@
 **RAG v2: Complete.**
 **RAG v3: Complete (V3.1-V3.4), wired end-to-end and validated with real Ollama runs.**
 **RAG v4: Complete (V4.1-V4.5), persistent incremental storage layer.**
+**RAG v5: Complete (V5.1-V5.4), browser-based interface for technicians.**
 
 | Phase | Status |
 |---|---|
@@ -28,14 +29,20 @@
 | V4.3 Incremental Vector Store Updates | Done (2026-08-27 - `vector_store.delete_chunks_by_source` + `ingestion.replace_document_vectors`; only the changed document is re-embedded, not the whole library) |
 | V4.4 Startup / Initialization Logic | Done (2026-08-27 - `main.initialize_system` reuses persisted data on a warm start instead of re-ingesting everything; confirmed with a real run: the embedding model isn't even loaded when data is already persisted) |
 | V4.5 Dynamic Document Discovery | Done (2026-08-27 - `config.discover_document_paths` scans the documents folder instead of a hardcoded list) |
+| V5.1 Flask App Skeleton | Done (2026-08-30 - `src/webapp.py`, lazy-singleton state, home page listing loaded documents) |
+| V5.2 Ask-a-Question Route | Done (2026-08-30 - `/ask`, friendly error message when Ollama is unavailable, empty-question validation) |
+| V5.3 Upload / Replace Route | Done (2026-08-30 - `/upload`, `secure_filename`, `threading.Lock()` around state refresh, warns instead of failing on a zero-chunk PDF) |
+| V5.4 One-Click Launcher | Done (2026-08-30 - `start_app.bat`; sets up the virtual environment on first run, opens the browser automatically; deliberate exception to test-first, see Testing convention below) |
 
-164 automated tests passing, zero known regressions.
+173 automated tests passing, zero known regressions.
 
 **Known accepted trade-off (measured, not a bug):** unweighted Reciprocal Rank Fusion in hybrid retrieval improves ranking on paraphrased questions (MRR 0.46 vs. 0.42 for lexical alone) but costs ranking quality on literal, datasheet-vocabulary questions (MRR 0.79 vs. a perfect 1.0 for lexical alone) - which are the majority of realistic queries. A dedicated risk check confirmed this never causes the no-answer gate to reject an answerable question. Deliberately left as-is; see README.md's Known Limitations for the full writeup and candidate fixes (weighted RRF, confidence-gated fallback) if this needs revisiting later. Re-run after RAG v4's storage refactor and reproduced the exact same MRR numbers across all 16 questions - confirming v4 changed nothing about retrieval behavior.
 
 **Known accepted risk (RAG v4, documented, not solved):** chunk metadata (SQLite) and the vector store (ChromaDB) are two separate stores updated in sequence, not inside one transaction. A failure between the two writes could leave a document's metadata and vectors out of sync. Accepted for now given a single local user with no concurrent writers.
 
-**RAG v4: complete.** Next priority: **RAG v5**, a technician-facing web interface for uploading PDFs into the persistent library (replacing an outdated document by uploading a new one under the same name) and asking questions through a browser instead of the CLI. Other open, non-blocking follow-ups: growing the evaluation corpus with additional real documents, and revisiting hybrid retrieval's fusion weighting if a larger or more paraphrase-heavy corpus changes the current trade-off.
+**Known open investigation (RAG v5, NOT yet resolved - do not treat as accepted until confirmed):** a real end-to-end test with a new, previously-unseen document (an NE555 timer datasheet, uploaded through the V5.3 upload route) surfaced two retrieval misses: (1) a question about a value inside a multi-column table returned the no-answer fallback even though the value is present in the document - working hypothesis is the chunker splitting a table's label from its numeric value across two chunks, since it has no notion of table structure; (2) a question returned an unrelated marketing bullet instead of the correct numeric spec - working hypothesis is a lexical-score tie between the two chunks, resolved by `retriever.py`'s deterministic tie-break (lowest `chunk_id` wins) in favor of the wrong one. Both hypotheses come from reading `chunker.py`/`retriever.py` directly, not guesswork, but are pending confirmation via a dedicated diagnostic script (`diagnose_retrieval.py`, temporary, not committed) before any fix is implemented. See README.md's Known Limitations for the user-facing writeup.
+
+**RAG v5: complete.** Next priority: confirming and fixing the retrieval misses above, using the NE555 datasheet as a new real test case - likely areas: table-aware chunking and a better tie-break signal in `retriever.py`. Other open, non-blocking follow-ups: growing the evaluation corpus with additional real documents, revisiting hybrid retrieval's fusion weighting if a larger or more paraphrase-heavy corpus changes the current trade-off, and a fully standalone executable (PyInstaller) so end users don't need Python installed at all.
 
 ### Testing convention established during V2
 
@@ -60,6 +67,41 @@ embedding generation) are mocked via `monkeypatch` at the
 point of use so these tests exercise only the orchestration
 logic being added, not steps already covered by their own
 modules' test suites.
+
+modules' test suites.
+
+### Testing convention established during V5
+
+`webapp.py` tests use Flask's `test_client()` (`app.testing =
+True`) and `monkeypatch.setattr(webapp, "_state", None)` to
+reset the lazy-singleton state between tests. Every pipeline
+call the routes make (`_get_state`, `add_or_replace_document`,
+`replace_document_vectors`, `load_all_chunks`,
+`answer_question`) is monkeypatched at the point of use, the
+same convention as V4 - a webapp test verifies routing,
+validation, and response rendering, never the real RAG
+pipeline underneath it.
+
+`pytest.ini` (`addopts = --ignore-glob=*_manual.py`) excludes
+the `tests/*_manual.py` scripts from default collection.
+Discovered during V5: pytest imports every `test_*.py` file
+during collection, including files with no `def test_...`
+functions, so these manual scripts (meant to be run
+individually via `python -m tests.test_X_manual`) were making
+real Ollama/embedding calls on every plain `pytest` invocation
+- the root cause of a full-suite runtime that varied wildly
+(28s-233s) across the whole project history. This is a
+collection-configuration fix, not a code change to the manual
+scripts themselves, which are unaffected and still runnable
+individually.
+
+`start_app.bat` (V5.4) is a deliberate, documented exception
+to test-first development: it is a Windows batch launcher, not
+Python logic, so there is no meaningful way to cover it with
+`pytest`. It was instead verified manually in two scenarios -
+a fresh install (temporarily renaming `.venv` to simulate a
+new user) and a normal run (existing `.venv`) - both confirmed
+working before considering V5.4 done.
 
 ---
 # AI Document Intelligence - Development Instructions
@@ -193,9 +235,12 @@ RAG v2
 RAG v3
 ↓
 RAG v4
+↓
+RAG v5
 
 Do NOT jump directly to embeddings, vector databases, or a
-user-facing interface.
+user-facing interface before the stage that precedes it is
+stable.
 
 ### RAG v1 Rules
 
@@ -290,6 +335,48 @@ Must remain:
 
 - 100% local
 - 100% free
+
+### RAG v5 Rules
+
+Only start after V4 is stable (it now is - see Current Status above).
+
+Focus: a browser-based interface so a technician never has to
+touch a terminal, built entirely on top of RAG v4's
+persistence layer - no new retrieval or storage logic.
+
+Includes:
+
+- Flask web app (`src/webapp.py`), single local user, no
+  authentication
+- Home page listing currently loaded documents
+- Ask-a-question route, reusing `main.answer_question` as-is
+- Upload/replace-a-document route, reusing
+  `ingestion.add_or_replace_document` and
+  `ingestion.replace_document_vectors` as-is - v5 saves the
+  uploaded bytes to disk and calls v4's functions, it does not
+  reimplement ingestion
+- A `threading.Lock()` around refreshing the in-memory chunk
+  list after an upload, since Flask's dev server can be
+  multi-threaded
+- A one-click launcher script for end users (`start_app.bat`)
+
+Explicitly OUT of scope for RAG v5 (identified during V5.3's
+real-document smoke test, deferred to future work - see Known
+Limitations in README.md and the "Known open investigation"
+note above):
+
+- Any change to `chunker.py`'s splitting logic (e.g.
+  table-aware chunking)
+- Any change to `retriever.py`'s scoring or tie-break logic
+- Full standalone packaging that removes the Python
+  installation requirement (PyInstaller or similar)
+
+Must remain:
+
+- 100% local
+- 100% free
+- No JavaScript framework required (plain HTML forms are
+  sufficient for this project's scope)
 
 ## Grounding Requirements
 
@@ -554,6 +641,30 @@ Must not contain:
 - SQL/persistence details (delegated to chunk_store.py)
 - Embedding computation itself (delegated to embeddings.py) or low-level vector storage details (delegated to vector_store.py) - this module only calls them in the right order
 - Retrieval or LLM logic
+
+### webapp.py (RAG v5)
+
+Responsible only for:
+
+- Flask routes: home page (`/`), ask-a-question (`/ask`),
+  upload/replace-a-document (`/upload`)
+- Lazy-singleton in-memory state (`_get_state`), initialized
+  once from `main.initialize_system` and refreshed after an
+  upload, guarded by a `threading.Lock()`
+- Summarizing loaded documents for display
+- Basic input validation (empty question, missing file, non-PDF
+  file) and turning pipeline exceptions into a friendly message
+
+Must not contain:
+
+- Retrieval, ranking, or confidence-scoring logic (see
+  `hybrid_retrieval.py`, `retriever.py`)
+- Ingestion or chunking logic (see `ingestion.py`,
+  `chunker.py`) - this module only calls them in the right
+  order, the same relationship `ingestion.py` has with
+  `chunk_store.py`/`vector_store.py`
+- Prompt construction or LLM calls (see `generator.py`,
+  `llm.py`)
 
 ## Git Workflow
 
