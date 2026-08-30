@@ -155,6 +155,37 @@ EVALUATION_DATASET = [
     },
 ]
 
+# Separate golden dataset for NE555N.pdf (RAG v6.3). Kept apart from
+# EVALUATION_DATASET on purpose: test_evaluation.py and
+# test_retrieval_metrics_real.py build their chunk corpus from
+# sample.pdf ALONE and assert perfect accuracy/MRR over the full
+# EVALUATION_DATASET list - mixing NE555N.pdf questions into that
+# same list would fail those tests immediately, since sample.pdf's
+# chunks obviously don't contain NE555N's answers. This is also why
+# v6's plan explicitly rejected a "one dataset per uploaded document"
+# pattern (see claude/rag-v6-plan.md's Non-goals) - this dataset
+# exists only because NE555N.pdf itself is a permanent, committed
+# reference document, not a real user's transient upload.
+NE555N_EVALUATION_DATASET = [
+    {
+        "id": "ne555_turn_off_time",
+        "question": "What is the turn off time of the NE555?",
+        "expected_keywords": ["toff", "0.5", "µs"],
+        "description": (
+            "Turn off time (toff) - the exact question that returned "
+            "the no-answer fallback throughout RAG v5.5's investigation, "
+            "until RAG v6.2's table-aware extraction fix"
+        ),
+        "style": "literal",
+    },
+    {
+        "id": "ne555_operating_supply_voltage_range",
+        "question": "What is the operating supply voltage range of the NE555?",
+        "expected_keywords": ["4.5", "16"],
+        "description": "Operating supply voltage range",
+        "style": "literal",
+    },
+]
 
 def evaluate_retrieval(dataset, chunks, top_k=3):
     """
