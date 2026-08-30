@@ -193,7 +193,6 @@ def test_ask_with_empty_question_shows_validation_message(monkeypatch):
 
 
 def test_upload_rejects_missing_file():
-    reset_state_helper = None  # noqa: no-op, kept for readability
     client = make_client()
     response = client.post("/upload", data={}, content_type="multipart/form-data")
     assert b"Please choose a file to upload." in response.data
@@ -206,7 +205,7 @@ def test_upload_rejects_non_pdf_file():
     assert b"Please upload a PDF file." in response.data
 
 
-def test_upload_saves_and_replaces_document(monkeypatch):
+def test_upload_saves_and_replaces_document(monkeypatch, tmp_path):
     reset_state(monkeypatch)
     client = make_client()
 
@@ -226,6 +225,7 @@ def test_upload_saves_and_replaces_document(monkeypatch):
     monkeypatch.setattr(webapp, "add_or_replace_document", fake_add_or_replace_document)
     monkeypatch.setattr(webapp, "replace_document_vectors", fake_replace_document_vectors)
     monkeypatch.setattr(webapp, "load_all_chunks", fake_load_all_chunks)
+    monkeypatch.setattr(webapp, "DOCUMENTS_FOLDER", str(tmp_path))
 
     data = {"document": (io.BytesIO(b"%PDF-1.4 fake content"), "test.pdf")}
     response = client.post("/upload", data=data, content_type="multipart/form-data")
@@ -236,7 +236,7 @@ def test_upload_saves_and_replaces_document(monkeypatch):
     assert b"uploaded" in response.data.lower()
 
 
-def test_upload_warns_when_no_chunks_extracted(monkeypatch):
+def test_upload_warns_when_no_chunks_extracted(monkeypatch, tmp_path):
     reset_state(monkeypatch)
     client = make_client()
 
@@ -244,6 +244,7 @@ def test_upload_warns_when_no_chunks_extracted(monkeypatch):
     monkeypatch.setattr(webapp, "add_or_replace_document", lambda path: [])
     monkeypatch.setattr(webapp, "replace_document_vectors", lambda chunks, source, collection=None: 0)
     monkeypatch.setattr(webapp, "load_all_chunks", lambda db_path=None: [])
+    monkeypatch.setattr(webapp, "DOCUMENTS_FOLDER", str(tmp_path))
 
     data = {"document": (io.BytesIO(b"%PDF-1.4 empty"), "scanned.pdf")}
     response = client.post("/upload", data=data, content_type="multipart/form-data")
@@ -251,7 +252,7 @@ def test_upload_warns_when_no_chunks_extracted(monkeypatch):
     assert b"no text could be extracted" in response.data.lower()
 
 
-def test_upload_sanitizes_filename(monkeypatch):
+def test_upload_sanitizes_filename(monkeypatch, tmp_path):
     reset_state(monkeypatch)
     client = make_client()
 
@@ -265,6 +266,7 @@ def test_upload_sanitizes_filename(monkeypatch):
     monkeypatch.setattr(webapp, "add_or_replace_document", fake_add_or_replace_document)
     monkeypatch.setattr(webapp, "replace_document_vectors", lambda chunks, source, collection=None: 1)
     monkeypatch.setattr(webapp, "load_all_chunks", lambda db_path=None: [])
+    monkeypatch.setattr(webapp, "DOCUMENTS_FOLDER", str(tmp_path))
 
     data = {"document": (io.BytesIO(b"%PDF-1.4 x"), "../../evil name.pdf")}
     client.post("/upload", data=data, content_type="multipart/form-data")
@@ -274,7 +276,7 @@ def test_upload_sanitizes_filename(monkeypatch):
     assert " " not in saved_paths[0]
 
 
-def test_upload_refreshes_document_list(monkeypatch):
+def test_upload_refreshes_document_list(monkeypatch, tmp_path):
     reset_state(monkeypatch)
     client = make_client()
 
@@ -285,6 +287,7 @@ def test_upload_refreshes_document_list(monkeypatch):
         webapp, "load_all_chunks",
         lambda db_path=None: [{"chunk_id": 1, "page": 1, "text": "x", "source": "data/documents/fresh.pdf"}],
     )
+    monkeypatch.setattr(webapp, "DOCUMENTS_FOLDER", str(tmp_path))
 
     data = {"document": (io.BytesIO(b"%PDF-1.4 x"), "fresh.pdf")}
     response = client.post("/upload", data=data, content_type="multipart/form-data")
