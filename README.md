@@ -181,7 +181,7 @@ assumed.
 - sentence-transformers (local embedding model)
 - ChromaDB (local, persistent vector store)
 - SQLite (persistent chunk metadata)
-- pytest (178 automated tests)
+- pytest (181 automated tests)
 - Git
 - PowerShell
 - Local LLM inference
@@ -193,6 +193,7 @@ assumed.
 **RAG v3: Complete (V3.1 - V3.4), wired end-to-end and validated with real Ollama runs.**
 **RAG v4: Complete (V4.1 - V4.5), persistent incremental storage layer.**
 **RAG v5: Complete (V5.1 - V5.5), browser-based interface for technicians.**
+**RAG v6: In progress (V6.1 done), extraction quality and document lifecycle control.**
 
 The system ingests one or more PDF documents, cleans and
 chunks their text, and retrieves the most relevant passages
@@ -235,7 +236,7 @@ datasheet): uploading it through the browser made it
 searchable immediately, with no restart needed.
 
 Retrieval quality is measured automatically and
-comparatively, not just assumed: **178 automated tests**
+comparatively, not just assumed: **181 automated tests**
 currently pass, including a golden-dataset evaluation across
 16 questions (12 matching the document's own technical
 vocabulary, 4 deliberately paraphrased in natural language)
@@ -279,6 +280,9 @@ to respond to it.
 - [x] Technician-oriented interface (RAG v5 - browser-based:
       ask questions, view loaded documents, upload or replace
       documents, one-click launcher script)
+- [x] Delete a loaded document from the browser (RAG v6.1 -
+      removes it from disk, the chunk repository, and the
+      vector store together, with a confirmation prompt)
 
 ## Known Limitations
 
@@ -414,4 +418,3 @@ Electronics Technician
 www.linkedin.com/in/daniel-felipe-solano-quiros
 
 Costa Rica
-

@@ -293,4 +293,89 @@ def test_upload_refreshes_document_list(monkeypatch, tmp_path):
     response = client.post("/upload", data=data, content_type="multipart/form-data")
 
     assert b"fresh.pdf" in response.data
+
+# ---------------------------------------------------------------
+# POST /delete - remove a document entirely (RAG v6.1)
+# ---------------------------------------------------------------
+
+def test_delete_removes_document_and_refreshes_list(monkeypatch, tmp_path):
+    reset_state(monkeypatch)
+    client = make_client()
+
+    pdf_path = tmp_path / "old.pdf"
+    pdf_path.write_bytes(b"%PDF-1.4 fake")
+    source = str(pdf_path)
+
+    monkeypatch.setattr(
+        webapp,
+        "_get_state",
+        lambda: {
+            "chunks": [{"chunk_id": 1, "page": 1, "text": "x", "source": source}],
+            "collection": "fake-collection",
+        }
+    )
+
+    delete_calls = []
+    monkeypatch.setattr(
+        webapp, "delete_document",
+        lambda src, collection=None: delete_calls.append((src, collection))
+    )
+    monkeypatch.setattr(webapp, "load_all_chunks", lambda db_path=None: [])
+
+    response = client.post("/delete", data={"source": source})
+
+    assert response.status_code == 200
+    assert delete_calls == [(source, "fake-collection")]
+    assert not pdf_path.exists(), "the file itself should be removed from disk"
+    assert b"deleted" in response.data.lower()
+    assert b"No documents loaded yet" in response.data
+
+
+def test_delete_rejects_unknown_source(monkeypatch):
+    reset_state(monkeypatch)
+    client = make_client()
+
+    monkeypatch.setattr(
+        webapp,
+        "_get_state",
+        lambda: {
+            "chunks": [{"chunk_id": 1, "page": 1, "text": "x", "source": "sample.pdf"}],
+            "collection": "fake-collection",
+        }
+    )
+
+    delete_calls = []
+    monkeypatch.setattr(
+        webapp, "delete_document",
+        lambda src, collection=None: delete_calls.append(src)
+    )
+
+    response = client.post("/delete", data={"source": "not_a_real_document.pdf"})
+
+    assert response.status_code == 200
+    assert delete_calls == []
+    assert b"sample.pdf" in response.data
+    assert b"valid document" in response.data.lower()
+
+
+def test_delete_rejects_missing_source(monkeypatch):
+    reset_state(monkeypatch)
+    client = make_client()
+
+    monkeypatch.setattr(
+        webapp,
+        "_get_state",
+        lambda: {"chunks": [], "collection": "fake-collection"}
+    )
+
+    delete_calls = []
+    monkeypatch.setattr(
+        webapp, "delete_document",
+        lambda src, collection=None: delete_calls.append(src)
+    )
+
+    response = client.post("/delete", data={})
+
+    assert response.status_code == 200
+    assert delete_calls == []
     

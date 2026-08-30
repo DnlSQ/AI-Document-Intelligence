@@ -12,6 +12,7 @@
         form.ask-form { margin-top: 1.5rem; display: flex; gap: 0.5rem; }
         form.ask-form input[type="text"] { flex: 1; padding: 0.4rem; }
         form.upload-form { margin-top: 1rem; display: flex; gap: 0.5rem; align-items: center; }
+        form.delete-form { display: inline; margin: 0; }
         .answer-box { margin-top: 1rem; padding: 0.8rem; background: #f4f4f4; border-radius: 4px; }
         .answer-box .question { font-weight: bold; margin-bottom: 0.4rem; }
         .error-box { margin-top: 1rem; padding: 0.8rem; background: #fdecea; color: #7a1f1f; border-radius: 4px; }
@@ -40,13 +41,27 @@
     <h2>Loaded documents</h2>
     {% if documents %}
     <table>
-        <tr><th>Document</th><th>Chunks</th></tr>
+        <tr><th>Document</th><th>Chunks</th><th></th></tr>
         {% for doc in documents %}
-        <tr><td>{{ doc.source }}</td><td>{{ doc.chunk_count }}</td></tr>
+        <tr>
+            <td>{{ doc.source }}</td>
+            <td>{{ doc.chunk_count }}</td>
+            <td>
+                <form class="delete-form" method="post" action="/delete" onsubmit="return confirm('Delete {{ doc.source }}? This cannot be undone.');">
+                    <input type="hidden" name="source" value="{{ doc.source }}">
+                    <button type="submit">Delete</button>
+                </form>
+            </td>
+        </tr>
         {% endfor %}
     </table>
     {% else %}
     <p class="empty">No documents loaded yet.</p>
+    {% endif %}
+    {% if delete_error %}
+    <div class="error-box">{{ delete_error }}</div>
+    {% elif delete_message %}
+    <div class="success-box">{{ delete_message }}</div>
     {% endif %}
 
     <h2>Upload / replace a document</h2>

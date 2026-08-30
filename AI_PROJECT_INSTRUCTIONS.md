@@ -5,6 +5,7 @@
 **RAG v3: Complete (V3.1-V3.4), wired end-to-end and validated with real Ollama runs.**
 **RAG v4: Complete (V4.1-V4.5), persistent incremental storage layer.**
 **RAG v5: Complete (V5.1-V5.5), browser-based interface for technicians.**
+**RAG v6: In progress (V6.1 done), extraction quality and document lifecycle control.**
 
 | Phase | Status |
 |---|---|
@@ -34,8 +35,9 @@
 | V5.3 Upload / Replace Route | Done (2026-08-30 - `/upload`, `secure_filename`, `threading.Lock()` around state refresh, warns instead of failing on a zero-chunk PDF) |
 | V5.4 One-Click Launcher | Done (2026-08-30 - `start_app.bat`; sets up the virtual environment on first run, opens the browser automatically; deliberate exception to test-first, see Testing convention below) |
 | V5.5 Retrieval Fixes | Done (2026-08-30 - lexical safety net in `hybrid_retrieval.py` generalized to handle exact-score ties, not just a single best match; no-answer gate in `main.py` now checks confidence across ALL retrieved chunks, not just the top-ranked one; both confirmed live via browser and validated against the golden dataset with zero regression) |
+| V6.1 Delete Document Route | Done (2026-08-30 - `POST /delete` in `webapp.py`, reusing a new `ingestion.delete_document` orchestration function that calls `chunk_store.delete_chunks_by_source` + `vector_store.delete_chunks_by_source` together, mirroring the same layering `add_or_replace_document`/`replace_document_vectors` already established; confirmation prompt via a plain `confirm()`, no JS framework; confirmed live: delete removes the document from the list, disk, and vector store, and a follow-up question about it correctly returns the no-answer fallback) |
 
-178 automated tests passing, zero known regressions.
+181 automated tests passing, zero known regressions.
 
 **Known accepted trade-off (measured, not a bug):** unweighted Reciprocal Rank Fusion in hybrid retrieval improves ranking on paraphrased questions (MRR 0.46 vs. 0.42 for lexical alone) but costs ranking quality on literal, datasheet-vocabulary questions (MRR 0.79 vs. a perfect 1.0 for lexical alone) - which are the majority of realistic queries. A dedicated risk check confirmed this never causes the no-answer gate to reject an answerable question. Deliberately left as-is; see README.md's Known Limitations for the full writeup and candidate fixes (weighted RRF, confidence-gated fallback) if this needs revisiting later. Re-run after RAG v4's storage refactor and reproduced the exact same MRR numbers across all 16 questions - confirming v4 changed nothing about retrieval behavior.
 
@@ -45,7 +47,34 @@
 
 **New known limitation surfaced by this investigation (RAG v5.5, not yet fixed): PDF table extraction loses column structure.** After all three fixes above, one of the two original questions ("turn off time") still returns the no-answer fallback - but now for a different, deeper reason: the correct chunk IS retrieved and passed to the LLM, and the LLM correctly declines rather than guess, because the datasheet's multi-column table was extracted as a flat sequence of symbols and numbers with no column alignment (confirmed by printing the chunk's full text - see README.md's Known Limitations for the exact excerpt). This is a `document_loader.py`/`chunker.py` table-handling gap, not a retrieval or generation bug - the grounding rule ("never guess") is working exactly as intended here. Candidate fix: reconstruct table rows into an explicit `Symbol: X | Parameter: Y | Value: Z` format during ingestion, before chunking.
 
-**RAG v5: complete (V5.1-V5.5).** Next priority: table-aware extraction (see limitation above). Other open, non-blocking follow-ups: growing the evaluation corpus with additional real documents (including NE555N.pdf-specific golden questions, so this exact bug class gets automated regression coverage instead of relying on manual smoke tests), revisiting hybrid retrieval's fusion weighting and tie-break signals more broadly now that two separate ties were found in one investigation, and a fully standalone executable (PyInstaller) so end users don't need Python installed at all.
+**RAG v5: complete (V5.1-V5.5).** RAG v6 (extraction quality + document lifecycle control) is now in progress - see `claude/rag-v6-plan.md` for the full plan. V6.1 (delete-document route, requested directly by Daniel to avoid contaminating the knowledge base with an accidental wrong upload) is done. Next priority: V6.2, table-aware extraction (see limitation above) - the core, unresolved piece of v6. Other open, non-blocking follow-ups, now tracked under v6 rather than v5: growing the evaluation corpus with additional real documents (including NE555N.pdf-specific golden questions), revisiting hybrid retrieval's fusion weighting and tie-break signals more broadly, safety-net threshold recalibration with more real data, and a fully standalone executable (PyInstaller) so end users don't need Python installed at all.
+
+**Observed during V6.1's real smoke test (2026-08-30, not a bug):** deleting a document and immediately re-uploading a file under the same name, right after a fresh app start, was slow enough that Daniel had to cancel and retry once. Consistent with the already-documented one-time embedding-model cold-load cost (see V5.2's performance detour above) - deleting never touches the embedding model, but the very next upload's `generate_embeddings_for_chunks` call can be the first thing in a fresh process to load `sentence-transformers` from disk, whichever action triggers it first. Two immediate retries in the same running process, and a subsequent full app restart, both completed normally - consistent with a one-time cold-start cost, not a defect introduced by the delete feature. Not pursued further per the project's "don't optimize without a measured bottleneck" principle.
+
+### RAG v6 Rules
+
+Only start after V5 is stable (it now is - see Current Status above).
+
+Focus: fixing the confirmed table-extraction gap from v5.5's real-document test, and giving the technician direct control over their own document library (delete), so an accidental wrong upload never has to be cleaned up by hand.
+
+Sub-phases, in order:
+
+- V6.1 Delete Document Route - done (see phase table above)
+- V6.2 Table-Aware Extraction - in progress: detect tables per page (PyMuPDF `find_tables()`), reconstruct them into structured `Symbol | Parameter | Value | Unit` text before chunking, with a safe fallback to the current plain-text extraction when no table is detected
+- V6.3 Golden Dataset Expansion (optional, low priority) - a few NE555N.pdf-specific questions in `evaluation.py`, NOT a general "one dataset per uploaded document" pattern (`evaluation.py` measures a small, fixed set of reference documents kept in the repo for regression testing, never a real end user's own uploads)
+- V6.4 Safety-Net Threshold Recalibration (optional, lowest priority, after V6.3)
+
+Explicitly OUT of scope for RAG v6:
+
+- Full standalone packaging (PyInstaller) - a packaging concern, unrelated to data/extraction quality
+- Auto-installing Python/Ollama/the model - already discussed and declined during v5
+- A general RRF re-weighting overhaul - not yet justified by data volume
+
+Must remain:
+
+- 100% local
+- 100% free
+- No JavaScript framework required
 
 ### Testing convention established during V2
 
@@ -69,8 +98,6 @@ External pipeline steps (PDF extraction, cleaning, chunking,
 embedding generation) are mocked via `monkeypatch` at the
 point of use so these tests exercise only the orchestration
 logic being added, not steps already covered by their own
-modules' test suites.
-
 modules' test suites.
 
 ### Testing convention established during V5
@@ -481,17 +508,13 @@ Do not optimize unless a measurable bottleneck exists.
 
 Prefer:
 
-```python
-def calculate_relevance_score(query, text):
-    ...
-```
+    def calculate_relevance_score(query, text):
+        ...
 
 over:
 
-```python
-def calc(q, t):
-    ...
-```
+    def calc(q, t):
+        ...
 
 Use:
 
@@ -630,13 +653,13 @@ Must not contain:
 - LLM or prompt logic
 - PDF extraction, cleaning, or chunking logic
 
-### ingestion.py (RAG v4)
+### ingestion.py (RAG v4, RAG v6.1)
 
 Responsible only for:
 
 - Orchestrating extraction -> cleaning -> chunking for one document
 - Assigning chunk_ids that continue from whatever is already persisted, so multiple documents never collide
-- Removing a document's outdated chunks/vectors when it's replaced
+- Removing a document's outdated chunks/vectors when it's replaced, or entirely when it's deleted (`delete_document`, RAG v6.1)
 - Keeping the chunk repository (chunk_store.py) and the vector store (vector_store.py) in sync for that one document
 
 Must not contain:
@@ -645,12 +668,13 @@ Must not contain:
 - Embedding computation itself (delegated to embeddings.py) or low-level vector storage details (delegated to vector_store.py) - this module only calls them in the right order
 - Retrieval or LLM logic
 
-### webapp.py (RAG v5)
+### webapp.py (RAG v5, RAG v6.1)
 
 Responsible only for:
 
 - Flask routes: home page (`/`), ask-a-question (`/ask`),
-  upload/replace-a-document (`/upload`)
+  upload/replace-a-document (`/upload`),
+  delete-a-document (`/delete`)
 - Lazy-singleton in-memory state (`_get_state`), initialized
   once from `main.initialize_system` and refreshed after an
   upload, guarded by a `threading.Lock()`

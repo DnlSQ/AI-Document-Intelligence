@@ -13,7 +13,7 @@ from flask import Flask, render_template, request
 from werkzeug.utils import secure_filename
 
 from src.main import initialize_system, answer_question
-from src.ingestion import add_or_replace_document, replace_document_vectors
+from src.ingestion import add_or_replace_document, replace_document_vectors, delete_document
 from src.chunk_store import load_all_chunks
 from src.config import DOCUMENTS_FOLDER, CHUNK_DB_PATH
 
@@ -111,6 +111,34 @@ def upload():
         upload_message=f"'{filename}' was uploaded and is ready to use."
     )
 
+@app.route("/delete", methods=["POST"])
+def delete():
+    state = _get_state()
+    documents = _document_summary(state["chunks"])
+
+    source = request.form.get("source", "").strip()
+    known_sources = {doc["source"] for doc in documents}
+
+    if not source or source not in known_sources:
+        return render_template(
+            "index.html", documents=documents,
+            delete_error="Please choose a valid document to delete."
+        )
+
+    delete_document(source, collection=state["collection"])
+
+    if os.path.exists(source):
+        os.remove(source)
+
+    with _state_lock:
+        state["chunks"] = load_all_chunks(CHUNK_DB_PATH)
+
+    documents = _document_summary(state["chunks"])
+
+    return render_template(
+        "index.html", documents=documents,
+        delete_message=f"'{source}' was deleted."
+    )
 
 if __name__ == "__main__":
     app.run(debug=True)

@@ -118,3 +118,28 @@ def replace_document_vectors(chunks, source, collection=None):
     embedded_chunks = generate_embeddings_for_chunks(chunks)
 
     return add_chunks_to_store(embedded_chunks, collection=collection)
+
+def delete_document(source, db_path=CHUNK_DB_PATH, collection=None):
+    """
+    Remove a document entirely from the persistent chunk
+    repository and the vector store.
+
+    Mirrors add_or_replace_document's "delete first" step, but
+    with nothing to re-add afterward - used when a document
+    should be removed altogether (RAG v6.1), not replaced by a
+    newer version under the same name.
+
+    Args:
+        source: The document identifier (e.g. its filename/path)
+            whose chunks and vectors should be removed.
+        db_path: Path to the SQLite chunk database (overridable
+            for tests).
+        collection: Optional vector store collection (for tests).
+            Defaults to the real persistent collection.
+    """
+    if collection is None:
+        collection = get_collection()
+
+    delete_chunks_by_source(source, db_path)
+    delete_vectors_by_source(source, collection=collection)
+    
