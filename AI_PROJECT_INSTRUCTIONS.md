@@ -5,7 +5,7 @@
 **RAG v3: Complete (V3.1-V3.4), wired end-to-end and validated with real Ollama runs.**
 **RAG v4: Complete (V4.1-V4.5), persistent incremental storage layer.**
 **RAG v5: Complete (V5.1-V5.5), browser-based interface for technicians.**
-**RAG v6: In progress (V6.1 done), extraction quality and document lifecycle control.**
+**RAG v6: Complete (V6.1-V6.3), extraction quality and document lifecycle control.**
 
 | Phase | Status |
 |---|---|
@@ -36,8 +36,11 @@
 | V5.4 One-Click Launcher | Done (2026-08-30 - `start_app.bat`; sets up the virtual environment on first run, opens the browser automatically; deliberate exception to test-first, see Testing convention below) |
 | V5.5 Retrieval Fixes | Done (2026-08-30 - lexical safety net in `hybrid_retrieval.py` generalized to handle exact-score ties, not just a single best match; no-answer gate in `main.py` now checks confidence across ALL retrieved chunks, not just the top-ranked one; both confirmed live via browser and validated against the golden dataset with zero regression) |
 | V6.1 Delete Document Route | Done (2026-08-30 - `POST /delete` in `webapp.py`, reusing a new `ingestion.delete_document` orchestration function that calls `chunk_store.delete_chunks_by_source` + `vector_store.delete_chunks_by_source` together, mirroring the same layering `add_or_replace_document`/`replace_document_vectors` already established; confirmation prompt via a plain `confirm()`, no JS framework; confirmed live: delete removes the document from the list, disk, and vector store, and a follow-up question about it correctly returns the no-answer fallback) |
+| V6.2 Table-Aware Extraction | Done (2026-08-30 - `document_loader.py` gained `_extract_page_text`/`_reconstruct_table`/`_build_column_labels`/`_clean_cell`; detected tables (`page.find_tables()`) are reconstructed into `Symbol: X \| Parameter: Y \| ...: value \| Unit: Z` lines appended after the page's original plain text, purely additive so pages without tables are unaffected; diagnosed first with a real page of NE555N.pdf via `diagnose_tables.py` rather than guessed; 10 new synthetic tests written test-first, confirmed red (`ImportError`) before implementation; also fixed a latent test-infra gap found along the way - `tests/test_document_loader.py` had zero real tests and was silently executing a real PDF read on every `pytest` run because its name did not match the `*_manual.py` ignore glob, renamed to `tests/test_document_loader_manual.py`; validated live: the NE555N.pdf "turn off time" question that returned the no-answer fallback throughout v5.5 now answers correctly, `0.5 µs`, with no regression on the question that already worked) |
+| V6.3 Golden Dataset Expansion | Done (2026-08-30 - new `NE555N_EVALUATION_DATASET` in `evaluation.py`, kept separate from `EVALUATION_DATASET` since `test_evaluation.py`/`test_retrieval_metrics_real.py` build their corpus from `sample.pdf` alone and would fail if NE555N.pdf questions were mixed in; new `tests/test_evaluation_ne555n.py` mirrors that same real-document pattern, pointed at NE555N.pdf; both questions from v5.5/v6.2 now pass automatically, including the stricter single-chunk `reciprocal_rank` check, turning a manual browser smoke test into permanent regression coverage) |
+| V6.4 Safety-Net Threshold Recalibration | Deliberately not pursued - no new evidence. `LEXICAL_SAFETY_NET_THRESHOLD = 0.35` is still calibrated from only the original two v5.5 cases: V6.2 fixed the `toff` question at the extraction layer, before the safety net is ever consulted, so V6.3 produced no new rescue case to learn from. Revisiting the threshold now would be guessing, not calibrating. |
 
-181 automated tests passing, zero known regressions.
+193 automated tests passing, zero known regressions.
 
 **Known accepted trade-off (measured, not a bug):** unweighted Reciprocal Rank Fusion in hybrid retrieval improves ranking on paraphrased questions (MRR 0.46 vs. 0.42 for lexical alone) but costs ranking quality on literal, datasheet-vocabulary questions (MRR 0.79 vs. a perfect 1.0 for lexical alone) - which are the majority of realistic queries. A dedicated risk check confirmed this never causes the no-answer gate to reject an answerable question. Deliberately left as-is; see README.md's Known Limitations for the full writeup and candidate fixes (weighted RRF, confidence-gated fallback) if this needs revisiting later. Re-run after RAG v4's storage refactor and reproduced the exact same MRR numbers across all 16 questions - confirming v4 changed nothing about retrieval behavior.
 
@@ -45,9 +48,9 @@
 
 **Resolved (RAG v5.5, 2026-08-30):** the two retrieval misses opened above were confirmed with `diagnose_retrieval.py` (temporary, never committed) and fixed with two small, targeted, test-first changes. (1) `hybrid_retrieval.py` gained a lexical safety net (`LEXICAL_SAFETY_NET_THRESHOLD = 0.35`) that force-includes a chunk lexical retrieval is highly confident about even when semantic search never found it and RRF fusion would otherwise drop it. (2) A live browser test then exposed a second gap - two chunks tied exactly on lexical score, and the safety net's original "single best match" design only ever looked at `lexical_results[0]`, missing its tied sibling. Generalized to check every chunk tied for the best score. (3) `main.py`'s no-answer confidence gate was changed to check `max(lexical_confidence, semantic_confidence)` across ALL retrieved chunks, not just the top-ranked one, since the safety net intentionally places a rescued chunk in the weakest slot, not rank #1, and the old gate would silently reject it there. All three fixes validated against the isolated original 32-chunk golden dataset (identical MRR/Precision/Recall to the documented baseline in every case) before being committed. 178 tests passing.
 
-**New known limitation surfaced by this investigation (RAG v5.5, not yet fixed): PDF table extraction loses column structure.** After all three fixes above, one of the two original questions ("turn off time") still returns the no-answer fallback - but now for a different, deeper reason: the correct chunk IS retrieved and passed to the LLM, and the LLM correctly declines rather than guess, because the datasheet's multi-column table was extracted as a flat sequence of symbols and numbers with no column alignment (confirmed by printing the chunk's full text - see README.md's Known Limitations for the exact excerpt). This is a `document_loader.py`/`chunker.py` table-handling gap, not a retrieval or generation bug - the grounding rule ("never guess") is working exactly as intended here. Candidate fix: reconstruct table rows into an explicit `Symbol: X | Parameter: Y | Value: Z` format during ingestion, before chunking.
+**Resolved (RAG v6.2, 2026-08-30): PDF table extraction losing column structure.** The limitation surfaced by v5.5 above is fixed. `diagnose_tables.py` (temporary, never committed) confirmed against a real page of NE555N.pdf that PyMuPDF's `page.find_tables()` does recover the row/column structure that `page.get_text()` throws away - the `toff` row extracted cleanly as `['t\noff', 'Turn off time (5) (V = V )\nreset CC', '', '0.5', '', '', '0.5', '', 'µs']`, with headers split across two merged rows and subscripted characters split onto their own cell line. `document_loader.py` now reconstructs each detected real table (2+ rows, filtering out degenerate 1-row artifacts like a page footer PyMuPDF also detects) into explicit `Symbol: X | Parameter: Y | ...: value | Unit: Z` facts, appended after the page's original plain text - purely additive, so any page without a table is provably unaffected. Validated with 191 tests (10 new, zero regressions) and live: the exact question that returned the no-answer fallback throughout v5.5 ("What is the turn off time of the NE555?") now answers correctly and grounded ("0.5 µs, Source: NE555N, page 5"), with no regression on the question that already worked. Known, accepted remaining gap: a table row where the source PDF packs two symbols into one visual row (e.g. `tr`/`tf`) does not split cleanly - not recoverable from `extract()`'s text alone without per-line bounding boxes, and no worse than pre-v6.2 behavior for that case.
 
-**RAG v5: complete (V5.1-V5.5).** RAG v6 (extraction quality + document lifecycle control) is now in progress - see `claude/rag-v6-plan.md` for the full plan. V6.1 (delete-document route, requested directly by Daniel to avoid contaminating the knowledge base with an accidental wrong upload) is done. Next priority: V6.2, table-aware extraction (see limitation above) - the core, unresolved piece of v6. Other open, non-blocking follow-ups, now tracked under v6 rather than v5: growing the evaluation corpus with additional real documents (including NE555N.pdf-specific golden questions), revisiting hybrid retrieval's fusion weighting and tie-break signals more broadly, safety-net threshold recalibration with more real data, and a fully standalone executable (PyInstaller) so end users don't need Python installed at all.
+**RAG v6: complete (V6.1-V6.3).** All three planned sub-phases are done and validated: document lifecycle control (delete), table-aware extraction, and permanent regression coverage for the exact bug class v5.5/v6.2 found. V6.4 (safety-net threshold recalibration) was deliberately not pursued - see its own phase-table row above for why. See `claude/rag-v6-plan.md` for the full plan and progress log. Remaining, non-blocking follow-ups: revisiting hybrid retrieval's fusion weighting and tie-break signals more broadly, reconstructing table rows that pack more than one symbol per row, and a fully standalone executable (PyInstaller) so end users don't need Python installed at all.
 
 **Observed during V6.1's real smoke test (2026-08-30, not a bug):** deleting a document and immediately re-uploading a file under the same name, right after a fresh app start, was slow enough that Daniel had to cancel and retry once. Consistent with the already-documented one-time embedding-model cold-load cost (see V5.2's performance detour above) - deleting never touches the embedding model, but the very next upload's `generate_embeddings_for_chunks` call can be the first thing in a fresh process to load `sentence-transformers` from disk, whichever action triggers it first. Two immediate retries in the same running process, and a subsequent full app restart, both completed normally - consistent with a one-time cold-start cost, not a defect introduced by the delete feature. Not pursued further per the project's "don't optimize without a measured bottleneck" principle.
 
@@ -60,9 +63,9 @@ Focus: fixing the confirmed table-extraction gap from v5.5's real-document test,
 Sub-phases, in order:
 
 - V6.1 Delete Document Route - done (see phase table above)
-- V6.2 Table-Aware Extraction - in progress: detect tables per page (PyMuPDF `find_tables()`), reconstruct them into structured `Symbol | Parameter | Value | Unit` text before chunking, with a safe fallback to the current plain-text extraction when no table is detected
-- V6.3 Golden Dataset Expansion (optional, low priority) - a few NE555N.pdf-specific questions in `evaluation.py`, NOT a general "one dataset per uploaded document" pattern (`evaluation.py` measures a small, fixed set of reference documents kept in the repo for regression testing, never a real end user's own uploads)
-- V6.4 Safety-Net Threshold Recalibration (optional, lowest priority, after V6.3)
+- V6.2 Table-Aware Extraction - done (see phase table above): tables detected per page (PyMuPDF `find_tables()`) are reconstructed into structured `Symbol | Parameter | ...: value | Unit` text appended to the page's plain text, with the plain text itself always preserved unchanged as the safe fallback when no real table is detected
+- V6.3 Golden Dataset Expansion - done (see phase table above): `NE555N_EVALUATION_DATASET`, a separate dataset from `EVALUATION_DATASET` in `evaluation.py` (kept apart because `test_evaluation.py`/`test_retrieval_metrics_real.py` assert perfect accuracy/MRR against `sample.pdf` alone), NOT a general "one dataset per uploaded document" pattern - this only exists because NE555N.pdf is a permanent, committed reference document, not a real end user's own upload
+- V6.4 Safety-Net Threshold Recalibration - deliberately not pursued (see phase table above): V6.2's fix resolved the only new confirmed case at the extraction layer, before the safety net is ever consulted, so there was no new rescue case to calibrate against
 
 Explicitly OUT of scope for RAG v6:
 
@@ -525,12 +528,16 @@ Use:
 
 ## Module Responsibilities
 
-### document_loader.py
+### document_loader.py (RAG v1, RAG v6.2)
 
 Responsible only for:
 
 - Document ingestion
-- PDF extraction
+- PDF extraction, including table-aware reconstruction of
+  detected tables into structured text (`_reconstruct_table`,
+  `_build_column_labels`, `_clean_cell`, RAG v6.2) - always
+  additive to the plain-text extraction, never a replacement
+  for it
 - Metadata preservation
 
 ### text_cleaner.py

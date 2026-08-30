@@ -181,7 +181,7 @@ assumed.
 - sentence-transformers (local embedding model)
 - ChromaDB (local, persistent vector store)
 - SQLite (persistent chunk metadata)
-- pytest (181 automated tests)
+- pytest (193 automated tests)
 - Git
 - PowerShell
 - Local LLM inference
@@ -193,7 +193,7 @@ assumed.
 **RAG v3: Complete (V3.1 - V3.4), wired end-to-end and validated with real Ollama runs.**
 **RAG v4: Complete (V4.1 - V4.5), persistent incremental storage layer.**
 **RAG v5: Complete (V5.1 - V5.5), browser-based interface for technicians.**
-**RAG v6: In progress (V6.1 done), extraction quality and document lifecycle control.**
+**RAG v6: Complete (V6.1 - V6.3), extraction quality and document lifecycle control.**
 
 The system ingests one or more PDF documents, cleans and
 chunks their text, and retrieves the most relevant passages
@@ -236,7 +236,7 @@ datasheet): uploading it through the browser made it
 searchable immediately, with no restart needed.
 
 Retrieval quality is measured automatically and
-comparatively, not just assumed: **181 automated tests**
+comparatively, not just assumed: **193 automated tests**
 currently pass, including a golden-dataset evaluation across
 16 questions (12 matching the document's own technical
 vocabulary, 4 deliberately paraphrased in natural language)
@@ -246,6 +246,18 @@ and hybrid retrieval. This comparison surfaced a real, measured
 trade-off - see Known Limitations below - which was
 investigated with a dedicated risk check before deciding how
 to respond to it.
+
+As of RAG v6.2, PDF extraction is table-aware: pages are still
+extracted as plain text as before, but any table PyMuPDF can
+detect (`page.find_tables()`) is additionally reconstructed
+into explicit `Symbol: X | Parameter: Y | ...: value | Unit: Z`
+facts appended to that page's text, instead of relying only on
+the default flattened, column-less dump. This was validated
+against a real, previously-unseen datasheet: a question that
+consistently returned the no-answer fallback under the
+flattened extraction ("What is the turn off time of the
+NE555?") now answers correctly ("0.5 µs, Source: NE555N, page
+5") with no regression on the question that already worked.
 
 ## Current Progress
 
@@ -283,6 +295,15 @@ to respond to it.
 - [x] Delete a loaded document from the browser (RAG v6.1 -
       removes it from disk, the chunk repository, and the
       vector store together, with a confirmation prompt)
+- [x] Table-aware PDF extraction (RAG v6.2 - detected tables
+      are reconstructed into explicit Symbol/Parameter/value/
+      Unit facts, appended to the page's plain text; validated
+      live against a real datasheet question that previously
+      had no answer)
+- [x] NE555N.pdf-specific golden dataset (RAG v6.3 - the two
+      questions from the v5.5/v6.2 investigation are now a
+      permanent automated regression check, not a manual
+      browser smoke test)
 
 ## Known Limitations
 
@@ -340,24 +361,45 @@ to respond to it.
   isolation: identical Precision/Recall/MRR to the previously
   documented baseline in every case, confirming zero
   regression.
-- **New limitation surfaced by the same investigation: PDF
-  table extraction loses column structure.** After both fixes
-  above, one of the two original questions ("turn off time")
-  still returns the no-answer fallback - but now for a
-  different, deeper reason. The correct chunk IS retrieved and
-  reaches the LLM; the model correctly declines rather than
-  guess, because the datasheet's multi-column table was
-  extracted as a flat sequence with no column alignment, e.g.:
-  `tr / tf / Output rise time / Output fall time / 100 / 100 /
-  200 / 200 / 100 / 100 / 300 / 300 / ns / toff / Turn off time
-  (5) (Vreset = VCC) / 0.5 / 0.5 / µs`. A human reading this
-  cold would also struggle to confidently match each number to
-  its symbol. This is a `document_loader.py`/`chunker.py`
-  table-handling gap, not a retrieval or generation bug - the
-  grounding rule ("never guess") is working exactly as
-  intended. Candidate fix: reconstruct table rows into an
-  explicit `Symbol: X | Parameter: Y | Value: Z` format during
-  ingestion, before chunking.
+- **Resolved (RAG v6.2): PDF table extraction losing column
+  structure.** The gap surfaced by the v5.5 investigation above
+  - a multi-column datasheet table extracted as a flat sequence
+  with no column alignment, e.g. `tr / tf / Output rise time /
+  Output fall time / 100 / 100 / 200 / 200 / 100 / 100 / 300 /
+  300 / ns / toff / Turn off time (5) (Vreset = VCC) / 0.5 /
+  0.5 / µs` - is fixed. A diagnostic script
+  (`diagnose_tables.py`) confirmed PyMuPDF's `page.find_tables()`
+  does recover the real row/column structure that
+  `page.get_text()` throws away. `document_loader.py` now
+  reconstructs each detected table into explicit
+  `Symbol: X | Parameter: Y | ...: value | Unit: Z` lines,
+  appended after the page's original plain text - purely
+  additive, so a page with no table (or only a degenerate one,
+  like a footer PyMuPDF also detects as a 1-row "table")
+  behaves exactly as before. Validated with 191 tests (zero
+  regressions on `sample.pdf`/`plantas.pdf`) and, more
+  importantly, live: the exact question that returned the
+  no-answer fallback throughout v5.5 ("What is the turn off
+  time of the NE555?") now answers correctly and grounded
+  ("0.5 µs, Source: NE555N, page 5"). Known, accepted
+  remaining gap: a table row where the source PDF itself packs
+  two symbols into one visual row (e.g. `tr`/`tf` sharing a
+  row) doesn't split cleanly - not recoverable from PyMuPDF's
+  `extract()` text alone without per-line bounding boxes, and
+  no worse than the pre-v6.2 behavior for that specific case.
+  As of RAG v6.3, both original v5.5 questions are also a
+  permanent, automated regression check
+  (`tests/test_evaluation_ne555n.py`), not just a live
+  smoke-test memory.
+- **Safety-net threshold recalibration (RAG v6.4) deliberately
+  not done - no new evidence to justify it.** `LEXICAL_SAFETY_NET_THRESHOLD
+  = 0.35` (in `hybrid_retrieval.py`) is still calibrated from
+  only the original two v5.5 cases: RAG v6.2's fix resolved the
+  `toff` question at the extraction layer, before the safety
+  net is ever consulted, so it produced no new rescue case to
+  learn from. Revisiting the threshold with only the same two
+  data points would be guessing, not calibrating - left as-is
+  until a real new case actually appears.
 
 ## Design Philosophy
 
@@ -379,10 +421,16 @@ a normal run, exactly as documented in its own section above.
 
 ## Future Vision
 
-RAG v5 is now complete: a technician can ask questions,
-upload or replace documents, and start the whole system with
-a single double-click, with no command line involved beyond
-a one-time Python/Ollama setup shared by any local-LLM tool.
+RAG v5 and RAG v6 are both complete: a technician can ask
+questions, upload, replace, or delete documents, and start the
+whole system with a single double-click, with no command line
+involved beyond a one-time Python/Ollama setup shared by any
+local-LLM tool. Every retrieval and extraction gap surfaced by
+real, previously-unseen documents so far (RAG v5.5, RAG v6.2)
+has been root-caused with evidence and fixed, not just patched
+around, and RAG v6.3 turned both of v5.5's original failing
+questions into permanent automated regression coverage instead
+of a manual smoke test someone has to remember to repeat.
 
 The long-term goal remains transforming the project into a
 technical troubleshooting assistant capable of helping
@@ -395,18 +443,16 @@ technicians:
 5. Reduce diagnosis time
 6. Improve equipment recovery time
 
-The next concrete milestone is table-aware extraction (see
-Known Limitations above) - the last open gap from the NE555
-real-document test, now that both retrieval misses are fixed.
-Growing the evaluation corpus with additional real documents
-(including NE555N.pdf-specific golden questions, so this exact
-bug class gets automated regression coverage instead of
-depending on manual smoke tests), revisiting hybrid
-retrieval's fusion weighting and tie-break signals more
-broadly now that two separate ties surfaced in one
-investigation, and a fully standalone executable (no separate
-Python installation required, most likely via PyInstaller)
-remain open, non-blocking follow-ups.
+Open, non-blocking follow-ups: revisiting hybrid retrieval's
+fusion weighting and tie-break signals more broadly now that
+two separate ties surfaced in one investigation, reconstructing
+table rows where the source PDF packs more than one symbol
+into a single visual row (see Known Limitations above),
+safety-net threshold recalibration if a new real rescue case
+ever appears (RAG v6.4, deliberately not pursued yet - see
+Known Limitations), and a fully standalone
+executable (no separate Python installation required, most
+likely via PyInstaller).
 
 ## Author
 
