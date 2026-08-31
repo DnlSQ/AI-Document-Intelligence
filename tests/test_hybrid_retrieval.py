@@ -284,4 +284,73 @@ def test_lexical_safety_net_rescues_tied_lexical_sibling_when_tie_break_winner_a
 
     result_ids = [r["chunk"]["chunk_id"] for r in results]
     assert result_ids == [21, 33, 41], "chunk 17 (the weakest survivor) should be replaced by chunk 41"
+
+def test_hybrid_retrieve_applies_custom_weights_to_rrf_formula(monkeypatch):
+    """
+    RAG v7.2: hybrid_retrieve accepts optional lexical_weight/
+    semantic_weight to scale each method's RRF contribution before
+    summing - the mechanism the V7.2 measurement script needs to
+    compare candidate weightings against the golden dataset before
+    picking a default. Both default to 1.0 (LEXICAL_WEIGHT/
+    SEMANTIC_WEIGHT), reproducing the original unweighted formula
+    exactly - every other test in this file still passes unchanged
+    with the defaults.
+    """
+    lexical_results = [make_result(10), make_result(1)]   # chunk 1 is rank 2
+    semantic_results = [make_result(1), make_result(20)]  # chunk 1 is rank 1
+
+    monkeypatch.setattr(
+        "src.hybrid_retrieval.retrieve_relevant_chunks",
+        lambda question, chunks, top_k: lexical_results
+    )
+    monkeypatch.setattr(
+        "src.hybrid_retrieval.semantic_search",
+        lambda question, top_k, collection: semantic_results
+    )
+
+    results = hybrid_retrieve(
+        "question", chunks=[], collection=None, top_k=3,
+        lexical_weight=2.0, semantic_weight=0.5,
+    )
+
+    chunk_1_result = next(r for r in results if r["chunk"]["chunk_id"] == 1)
+    expected_score = round(2.0 * (1 / (RRF_K + 2)) + 0.5 * (1 / (RRF_K + 1)), 8)
+    assert round(chunk_1_result["rrf_score"], 8) == expected_score
+
+
+def test_hybrid_retrieve_weighting_can_change_the_final_ranking(monkeypatch):
+    """
+    The whole point of weighting: a chunk found by BOTH methods
+    (lexical rank 1 + a weak semantic rank) should lose the top
+    spot to a chunk found ONLY by semantic search at its best rank,
+    once semantic_weight is raised enough - proving the weight
+    genuinely participates in ranking, not just cosmetic score
+    reporting.
+
+    chunk 99 is an unrelated filler chunk occupying semantic rank
+    2, purely so chunk 1's semantic appearance lands at rank 3
+    (not rank 1) - this keeps the unweighted comparison a clean,
+    non-tied margin instead of the coincidental tie that a naive
+    "both chunks are someone's rank 1" setup would produce.
+    """
+    lexical_results = [make_result(1)]
+    semantic_results = [make_result(3), make_result(99), make_result(1)]
+
+    monkeypatch.setattr(
+        "src.hybrid_retrieval.retrieve_relevant_chunks",
+        lambda question, chunks, top_k: lexical_results
+    )
+    monkeypatch.setattr(
+        "src.hybrid_retrieval.semantic_search",
+        lambda question, top_k, collection: semantic_results
+    )
+
+    unweighted = hybrid_retrieve("question", chunks=[], collection=None, top_k=1)
+    assert unweighted[0]["chunk"]["chunk_id"] == 1
+
+    heavily_semantic = hybrid_retrieve(
+        "question", chunks=[], collection=None, top_k=1,
+        lexical_weight=0.1, semantic_weight=5.0,
+    )
+    assert heavily_semantic[0]["chunk"]["chunk_id"] == 3
     

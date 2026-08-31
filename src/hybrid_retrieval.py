@@ -55,6 +55,15 @@ CANDIDATE_POOL_SIZE = 10
 # similar future cases are still caught, while staying well above
 # MIN_CONFIDENCE_THRESHOLD (0.15) so a merely-adequate lexical
 # match isn't forced in without real conviction.
+# Default multipliers applied to each method's RRF contribution
+# before summing (see hybrid_retrieve). Both default to 1.0,
+# reproducing the original unweighted formula exactly - these are
+# the values used when the caller does not override them. Not
+# tuned yet: RAG v7.2 introduces the mechanism first, then
+# test_hybrid_weighting_manual.py measures real candidate weights
+# against the golden dataset before any default changes.
+LEXICAL_WEIGHT = 1.0
+SEMANTIC_WEIGHT = 1.0
 LEXICAL_SAFETY_NET_THRESHOLD = 0.35
 
 
@@ -151,7 +160,10 @@ def _apply_lexical_safety_net(top_results, fused_results, lexical_results):
     return top_results[:-1] + [safety_net_result]
 
 
-def hybrid_retrieve(question, chunks, collection=None, top_k=3):
+def hybrid_retrieve(
+    question, chunks, collection=None, top_k=3,
+    lexical_weight=LEXICAL_WEIGHT, semantic_weight=SEMANTIC_WEIGHT,
+):
     """
     Retrieve the most relevant chunks for a question by fusing
     lexical retrieval and semantic search with Reciprocal Rank
@@ -166,6 +178,14 @@ def hybrid_retrieve(question, chunks, collection=None, top_k=3):
         collection: Optional vector store collection (for tests).
             Defaults to the real persistent collection.
         top_k: Number of chunks to return after fusion.
+        lexical_weight: Multiplier applied to lexical retrieval's
+            RRF contribution before summing. Defaults to
+            LEXICAL_WEIGHT (1.0), reproducing the original
+            unweighted formula.
+        semantic_weight: Multiplier applied to semantic search's
+            RRF contribution before summing. Defaults to
+            SEMANTIC_WEIGHT (1.0), reproducing the original
+            unweighted formula.
 
     Returns:
         List of results, ranked by fused score (best first), each:
@@ -213,11 +233,11 @@ def hybrid_retrieve(question, chunks, collection=None, top_k=3):
 
         lexical_rank = lexical_ranks.get(chunk_id)
         if lexical_rank is not None:
-            rrf_score += 1 / (RRF_K + lexical_rank)
+            rrf_score += lexical_weight * (1 / (RRF_K + lexical_rank))
 
         semantic_rank = semantic_ranks.get(chunk_id)
         if semantic_rank is not None:
-            rrf_score += 1 / (RRF_K + semantic_rank)
+            rrf_score += semantic_weight * (1 / (RRF_K + semantic_rank))
 
         fused_results.append({
             "chunk": chunk_by_id[chunk_id],
@@ -240,3 +260,4 @@ def hybrid_retrieve(question, chunks, collection=None, top_k=3):
     )
 
     return top_results
+
