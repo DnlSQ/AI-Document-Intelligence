@@ -45,6 +45,7 @@ def discover_document_paths(folder=DOCUMENTS_FOLDER):
 DOCUMENT_PATHS = discover_document_paths()
 
 CHUNK_DB_PATH = "data/chunk_store.db"
+QA_HISTORY_DB_PATH = "data/qa_history.db"
 
 # Number of chunks retrieved per question and passed to the generator.
 TOP_K_RESULTS = 3
