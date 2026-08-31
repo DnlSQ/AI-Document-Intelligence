@@ -126,7 +126,7 @@ def test_answer_question_calls_hybrid_retrieve_and_generator(monkeypatch):
     hybrid_calls = []
     generate_calls = []
 
-    def fake_hybrid_retrieve(question, chunks_arg, collection=None, top_k=3):
+    def fake_hybrid_retrieve(question, chunks_arg, collection=None, top_k=3, **kwargs):
         hybrid_calls.append((question, chunks_arg, collection, top_k))
         return [{
             "chunk": chunks[0],
@@ -167,7 +167,7 @@ def test_answer_question_returns_grounded_fallback_when_no_chunks_found(monkeypa
 
     generate_calls = []
 
-    def fake_hybrid_retrieve(question, chunks_arg, collection=None, top_k=3):
+    def fake_hybrid_retrieve(question, chunks_arg, collection=None, top_k=3, **kwargs):
         return []
 
     def fake_generate_answer(question, retrieved_chunks):
@@ -196,7 +196,7 @@ def test_answer_question_uses_default_top_k(monkeypatch):
 
     captured = {}
 
-    def fake_hybrid_retrieve(question, chunks_arg, collection=None, top_k=3):
+    def fake_hybrid_retrieve(question, chunks_arg, collection=None, top_k=3, **kwargs):
         captured["top_k"] = top_k
         return []
 
@@ -225,7 +225,7 @@ def test_answer_question_returns_fallback_when_both_confidences_too_low(monkeypa
 
     generate_calls = []
 
-    def fake_hybrid_retrieve(question, chunks_arg, collection=None, top_k=3):
+    def fake_hybrid_retrieve(question, chunks_arg, collection=None, top_k=3, **kwargs):
         weak_chunk = {"chunk_id": 1, "page": 1, "text": "barely related", "source": "sample.pdf"}
         return [{
             "chunk": weak_chunk,
@@ -262,7 +262,7 @@ def test_answer_question_proceeds_when_only_lexical_confidence_is_high(monkeypat
 
     generate_calls = []
 
-    def fake_hybrid_retrieve(question, chunks_arg, collection=None, top_k=3):
+    def fake_hybrid_retrieve(question, chunks_arg, collection=None, top_k=3, **kwargs):
         chunk = {"chunk_id": 1, "page": 1, "text": "some match", "source": "sample.pdf"}
         return [{
             "chunk": chunk,
@@ -295,7 +295,7 @@ def test_answer_question_proceeds_when_only_semantic_confidence_is_high(monkeypa
 
     generate_calls = []
 
-    def fake_hybrid_retrieve(question, chunks_arg, collection=None, top_k=3):
+    def fake_hybrid_retrieve(question, chunks_arg, collection=None, top_k=3, **kwargs):
         chunk = {"chunk_id": 1, "page": 1, "text": "some match", "source": "sample.pdf"}
         return [{
             "chunk": chunk,
@@ -328,7 +328,7 @@ def test_answer_question_proceeds_when_confidence_meets_threshold_exactly(monkey
 
     generate_calls = []
 
-    def fake_hybrid_retrieve(question, chunks_arg, collection=None, top_k=3):
+    def fake_hybrid_retrieve(question, chunks_arg, collection=None, top_k=3, **kwargs):
         chunk = {"chunk_id": 1, "page": 1, "text": "some match", "source": "sample.pdf"}
         return [{
             "chunk": chunk,
@@ -366,7 +366,7 @@ def test_answer_question_proceeds_when_a_non_top_ranked_result_is_confident(monk
 
     generate_calls = []
 
-    def fake_hybrid_retrieve(question, chunks_arg, collection=None, top_k=3):
+    def fake_hybrid_retrieve(question, chunks_arg, collection=None, top_k=3, **kwargs):
         weak_chunk = {"chunk_id": 1, "page": 1, "text": "barely related", "source": "sample.pdf"}
         other_chunk = {"chunk_id": 2, "page": 1, "text": "also weak", "source": "sample.pdf"}
         rescued_chunk = {"chunk_id": 3, "page": 4, "text": "toff turn off time 0.5 us", "source": "sample.pdf"}
@@ -528,4 +528,45 @@ def test_build_vector_store_resets_before_writing(monkeypatch):
     result = collection.get(ids=["1"])
     assert result["documents"][0] == "fresh"
 
+
+def test_answer_question_passes_production_tuned_weights_to_hybrid_retrieve(monkeypatch):
+    """
+    RAG v7.2: answer_question must request the production-tuned
+    RRF weights (main.PRODUCTION_LEXICAL_WEIGHT /
+    PRODUCTION_SEMANTIC_WEIGHT), not hybrid_retrieve's own neutral
+    1.0/1.0 defaults. See test_hybrid_weighting_manual.py's real
+    measurement (2026-08-31, full golden dataset: sample.pdf +
+    NE555N.pdf) for why 2.0/1.0 was chosen - it strictly beat the
+    unweighted baseline on Precision@K/Recall@K/MRR for "all
+    questions" and "literal only", and exactly matched it (no
+    regression) on paraphrased questions.
+
+    This only checks the WIRING - that the right values are
+    requested. The RRF math itself is already fully covered in
+    test_hybrid_retrieval.py, which deliberately keeps testing the
+    neutral 1.0/1.0 defaults so the fusion mechanism stays decoupled
+    from this dataset-specific tuning decision.
+    """
+    from src.main import PRODUCTION_LEXICAL_WEIGHT, PRODUCTION_SEMANTIC_WEIGHT
+
+    captured_kwargs = {}
+
+    def fake_hybrid_retrieve(question, chunks_arg, collection=None, top_k=3, **kwargs):
+        captured_kwargs.update(kwargs)
+        return [{
+            "chunk": {"chunk_id": 1, "page": 1, "text": "some text", "source": "sample.pdf"},
+            "rrf_score": 0.05,
+            "lexical_rank": 1,
+            "semantic_rank": 1,
+            "lexical_confidence": 0.9,
+            "semantic_confidence": 0.9
+        }]
+
+    monkeypatch.setattr("src.main.hybrid_retrieve", fake_hybrid_retrieve)
+    monkeypatch.setattr("src.main.generate_answer", lambda question, retrieved_chunks: "answer")
+
+    answer_question("question", chunks=[])
+
+    assert captured_kwargs.get("lexical_weight") == PRODUCTION_LEXICAL_WEIGHT
+    assert captured_kwargs.get("semantic_weight") == PRODUCTION_SEMANTIC_WEIGHT
     
