@@ -181,7 +181,7 @@ assumed.
 - sentence-transformers (local embedding model)
 - ChromaDB (local, persistent vector store)
 - SQLite (persistent chunk metadata)
-- pytest (210 automated tests)
+- pytest (224 automated tests)
 - Git
 - PowerShell
 - Local LLM inference
@@ -194,7 +194,7 @@ assumed.
 **RAG v4: Complete (V4.1 - V4.5), persistent incremental storage layer.**
 **RAG v5: Complete (V5.1 - V5.5), browser-based interface for technicians.**
 **RAG v6: Complete (V6.1 - V6.3), extraction quality and document lifecycle control.**
-**RAG v7: In Progress (V7.1, V7.2.1, V7.2.2 done), UI polish, measured retrieval-weight tuning, and multi-symbol table row support.**
+**RAG v7: In Progress (V7.1, V7.2.1, V7.2.2, V7.3.1 done), UI polish, measured retrieval-weight tuning, multi-symbol table row support, and persistent Q&A history.**
 
 The system ingests one or more PDF documents, cleans and
 chunks their text, and retrieves the most relevant passages
@@ -237,7 +237,7 @@ datasheet): uploading it through the browser made it
 searchable immediately, with no restart needed.
 
 Retrieval quality is measured automatically and
-comparatively, not just assumed: **210 automated tests**
+comparatively, not just assumed: **224 automated tests**
 currently pass, including a golden-dataset evaluation across
 16 questions (12 matching the document's own technical
 vocabulary, 4 deliberately paraphrased in natural language)
@@ -310,6 +310,23 @@ validated live: "What is the output rise time of the NE555?"
 and "What is the output fall time of the NE555?" now each
 answer correctly and independently, citing page 5.
 
+As of RAG v7.3.1, the browser interface shows a persistent
+question/answer history in a right-hand column next to the main
+page (SQLite-backed, `data/qa_history.db`), so a technician can
+revisit a past answer without re-asking a question. `/ask` uses
+the Post/Redirect/Get pattern: instead of rendering the answer
+directly from the POST request, it saves the result and redirects
+to the home page, which displays it once. This was a deliberate
+fix for a real bug found during live validation - refreshing the
+browser after asking a question used to resubmit the form,
+silently duplicating the entry in history and triggering an extra,
+wasted LLM call - not a design chosen up front. The same live
+validation pass also surfaced an unrelated, separate retrieval gap
+(a cross-document ranking ambiguity between two similarly-worded
+"voltage" questions in different documents) - see Known
+Limitations below; it does not block this feature and is tracked
+as a candidate for a future retrieval-quality phase.
+
 ## Current Progress
 
 - [x] Local LLM setup
@@ -372,6 +389,13 @@ answer correctly and independently, citing page 5.
       count; also fixes a safety-net bug, found via live
       validation, that could evict a correct, tied-best-score
       result to admit an unrelated, boilerplate-inflated one)
+- [x] Persistent Q&A history (RAG v7.3.1 - `src/qa_history.py`,
+      SQLite-backed; shown in a right-hand column on the home
+      page; `/ask` uses the Post/Redirect/Get pattern so that
+      refreshing the page after asking a question never resubmits
+      the form, preventing duplicate history entries and wasted
+      LLM calls - a fix for a real bug found via live validation,
+      not a design chosen up front)
 
 ## Known Limitations
 
@@ -436,7 +460,36 @@ answer correctly and independently, citing page 5.
   NE555?" and "What is the output fall time of the NE555?"
   now each answer correctly and independently, citing page 5
   (previously: a no-answer fallback with a garbled source
-  citation). 210 tests passing, zero regressions.
+  citation). 210 tests passing, zero regressions. The NE555N.pdf
+  golden dataset was later extended with two regression cases
+  (`ne555_output_rise_time`/`ne555_output_fall_time`, keyword-
+  checking for `tr`/`tf` as standalone tokens) that guard
+  specifically against `_split_multi_symbol_row` ever regressing
+  to the original garbled `Symbol: trtf` behavior.
+- **Open (found during RAG v7.3.1 live validation): a
+  cross-document retrieval ranking ambiguity can hide a correct
+  answer that exists in a different document than the one the
+  top results come from.** "What is the maximum
+  collector-emitter voltage?" returns the no-answer fallback
+  (citing NE555N.pdf) even though `sample.pdf` (a transistor
+  datasheet) contains the answer verbatim (`VCEO |
+  collector-emitter voltage | open base | - | -50 | V`).
+  Diagnosed with `diagnose_collector_emitter_voltage.py`: the
+  correct chunk scores lexical_confidence=0.270 and is never
+  found by semantic search (semantic_confidence=0.000), ranking
+  #4 in the fused results behind three NE555N.pdf "Absolute
+  maximum ratings" chunks that share generic vocabulary
+  ("voltage", "maximum") with the query - with production
+  `TOP_K_RESULTS=3`, the correct chunk never reaches the LLM.
+  Confirmed not a regression from the RAG v7.2.2 safety-net fix
+  (0.270 is below `LEXICAL_SAFETY_NET_THRESHOLD = 0.35`, so the
+  safety net never considers it - this gap is structural and
+  pre-existing). Root cause: the query uses plain English
+  ("collector-emitter voltage") rather than the technical symbol
+  ("VCEO") that the existing technical-term-weighting logic
+  (V2.1.2) would reward more. Confirmed with Daniel as not
+  blocking V7.3.1; not yet assigned a phase number - a candidate
+  for a future retrieval-quality phase.
 - **Confidence is a lexical/semantic signal, not a true
   probability:** it can't perfectly distinguish a real (if
   generic) match from a coincidental one. It catches
@@ -560,19 +613,22 @@ technicians:
 6. Improve equipment recovery time
 
 RAG v7 is in progress: V7.1 (filename display + single delete
-button), V7.2.1 (measured hybrid retrieval weight tuning), and
+button), V7.2.1 (measured hybrid retrieval weight tuning),
 V7.2.2 (multi-symbol table row splitting plus a lexical
-safety-net eviction fix - see Known Limitations above) are all
-done. Still open: two new technician-facing features - a
-persistent question/answer history (V7.3.1) and, as an
-optional stretch, resolving conversational follow-up questions
-before retrieval (V7.3.2).
+safety-net eviction fix - see Known Limitations above), and
+V7.3.1 (persistent question/answer history with a
+Post/Redirect/Get fix for a refresh-duplication bug found via
+live validation) are all done. Still open, as an optional
+stretch: resolving conversational follow-up questions before
+retrieval (V7.3.2).
 
 Open, non-blocking follow-ups: safety-net threshold
 recalibration if a new real rescue case ever appears (RAG v6.4,
-deliberately not pursued yet - see Known Limitations), and a
-fully standalone executable (no separate Python installation
-required, most likely via PyInstaller).
+deliberately not pursued yet - see Known Limitations), a
+cross-document retrieval ranking ambiguity found during V7.3.1's
+live validation (see Known Limitations above, not yet assigned a
+phase), and a fully standalone executable (no separate Python
+installation required, most likely via PyInstaller).
 
 ## Author
 

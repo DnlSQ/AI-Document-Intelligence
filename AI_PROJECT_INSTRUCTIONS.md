@@ -6,7 +6,7 @@
 **RAG v4: Complete (V4.1-V4.5), persistent incremental storage layer.**
 **RAG v5: Complete (V5.1-V5.5), browser-based interface for technicians.**
 **RAG v6: Complete (V6.1-V6.3), extraction quality and document lifecycle control.**
-**RAG v7: In Progress (V7.1, V7.2.1, V7.2.2 done), UI polish, measured retrieval-weight tuning, and multi-symbol table row support.**
+**RAG v7: In Progress (V7.1, V7.2.1, V7.2.2, V7.3.1 done), UI polish, measured retrieval-weight tuning, multi-symbol table row support, and persistent Q&A history.**
 
 | Phase | Status |
 |---|---|
@@ -44,14 +44,20 @@
 | V7.2.1 Weighted Hybrid Retrieval (Production Tuning) | Done (2026-08-31 - `hybrid_retrieve` gained optional `lexical_weight`/`semantic_weight` parameters, defaulting to `LEXICAL_WEIGHT = 1.0`/`SEMANTIC_WEIGHT = 1.0` so the fusion mechanism's own tests keep testing the neutral, unweighted formula unchanged; `tests/test_hybrid_weighting_manual.py` measured 5 candidate weight pairs against the full 18-question golden dataset (16 sample.pdf + 2 NE555N.pdf) with real embeddings; `lexical_weight=2.0, semantic_weight=1.0` strictly beat the unweighted baseline on Precision@K/Recall@K/MRR overall and literal-only, and exactly matched it (no regression) on paraphrased questions; `main.py` gained `PRODUCTION_LEXICAL_WEIGHT = 2.0`/`PRODUCTION_SEMANTIC_WEIGHT = 1.0` and `answer_question` now passes them explicitly to `hybrid_retrieve`, kept as an application-level tuning decision separate from the module's own neutral default) |
 | V7.2.2 Multi-Symbol Table Rows | Done (2026-08-31 - `_split_multi_symbol_row` in `document_loader.py` derives the packed symbol count from the Parameter column, corroborated by a matching value column, then groups the Symbol column's own lines - however many there are - into that many even chunks; a first attempt anchored on the Symbol column's own line count broke against the real `tr`/`tf` row (`t\noptr\nt\nf`-shaped, i.e. `t\nr\nt\nf`, 4 lines for 2 symbols) and was redesigned test-first once real evidence (`diagnose_tr_tf_raw_cells.py`) confirmed the shape. Live validation then surfaced a second bug in `_apply_lexical_safety_net` (RAG v5.5): it could evict a correct, tied-best-score result to admit an unrelated, boilerplate-inflated one; fixed by protecting any already-tied, high-confidence result from eviction. Both confirmed live and with 210 passing tests - see the RAG v7.2.2 entry below) |
 | V7.2.3 Safety-Net Threshold Recalibration (round 2) | Deferred - V7.2.2 did surface a new real safety-net bug, but it concerned WHICH tied result gets evicted, not the `LEXICAL_SAFETY_NET_THRESHOLD = 0.35` value itself (fixed there instead, see V7.2.2's row above); the threshold remains unrevisited until a case actually calls it into question |
-| V7.3.1 Persistent Q&A History | Planned - new `qa_history.py` module (SQLite-backed, mirroring `chunk_store.py`'s pattern) so a technician can browse past questions/answers instead of re-asking |
+| V7.3.1 Persistent Q&A History | Done (2026-08-31 - new `qa_history.py` module (SQLite-backed, mirroring `chunk_store.py`'s pattern), displayed in a right-hand column on the home page; `/ask` uses the Post/Redirect/Get pattern - storing its result in `session["ask_result"]` and redirecting to `home()`, which pops and displays it once - fixing a real refresh-duplication bug found via live validation, not a design chosen up front; 224 passing tests, zero regressions - see the RAG v7.3.1 entry below) |
 | V7.3.2 Conversational Follow-Up Resolution | Planned, optional stretch - new `conversation.py` module that rewrites a follow-up question into a standalone one using history, via an LLM call, BEFORE retrieval; history may only resolve references in the current question, never supply answer content directly, to protect grounding |
 
-210 automated tests passing, zero known regressions.
+224 automated tests passing, zero known regressions.
 
 **Resolved (RAG v7.2.1, 2026-08-31): unweighted Reciprocal Rank Fusion in hybrid retrieval was a measured trade-off, not a bug.** It originally improved ranking on paraphrased questions (MRR 0.46 vs. 0.42 for lexical alone) but cost ranking quality on literal, datasheet-vocabulary questions (MRR 0.79 vs. a perfect 1.0 for lexical alone) - the majority of realistic queries. A dedicated risk check had confirmed this never caused the no-answer gate to reject an answerable question, so it was deliberately left unweighted until real evidence justified a change (re-run after RAG v4's storage refactor, reproducing the exact same MRR numbers - confirming v4 changed nothing about retrieval behavior). `hybrid_retrieve` now accepts optional `lexical_weight`/`semantic_weight` (see phase table above); `tests/test_hybrid_weighting_manual.py` measured candidates against the expanded 18-question golden dataset and found `lexical_weight=2.0, semantic_weight=1.0` strictly better than the unweighted baseline overall and literal-only, with zero regression on paraphrased questions. `main.py` now requests this tuning in production. See README.md's Known Limitations for the full numbers.
 
-**Resolved (RAG v7.2.2, 2026-08-31): a table row packing more than one symbol into one visual row didn't split cleanly, and a related lexical safety-net bug could evict the correct answer once it did.** Confirmed against a real page of NE555N.pdf via `diagnose_multi_symbol_tables.py`/`diagnose_tr_tf_raw_cells.py` (temporary, never committed): the `tr`/`tf` row's Symbol column extracts as `t\nr\nt\nf` (4 lines, since PyMuPDF also splits each packed symbol across its own base+subscript lines) rather than the assumed `tr\ntf` (2 lines) - a first implementation anchored on the Symbol column's own line count broke against this real shape, and would have broken again for any future document with a different line count, per Daniel's explicit review. `_split_multi_symbol_row` (`document_loader.py`) now derives the symbol count from the Parameter column instead, corroborated by at least one value column splitting into that same count, then groups the Symbol column's own lines - however many there are - into that many even chunks, adapting to any lines-per-symbol count rather than a hardcoded one. Live validation then surfaced a second, independent bug: the correct fact was retrieved, but `_apply_lexical_safety_net` (RAG v5.5) evicted it to admit an unrelated page whose lexical score only tied because of a header repeated on nearly every page ("NE555 - SA555 - SE555"), not because it was relevant. The safety net's eviction step now excludes any slot already tied for the best lexical score at sufficient confidence - the same bar a rescue candidate must clear - so it never sacrifices one strong match to admit another equally strong one, and declines to rescue at all when no genuinely weaker slot exists. Both confirmed live: "What is the output rise time of the NE555?" and "What is the output fall time of the NE555?" now each answer correctly and independently, citing page 5. 210 tests passing (13 new since RAG v7.2.1: 11 in `test_document_loader.py` for the multi-symbol split and its redesign, 2 in `test_hybrid_retrieval.py` for the safety-net eviction fix), zero regressions.
+**Resolved (RAG v7.2.2, 2026-08-31): a table row packing more than one symbol into one visual row didn't split cleanly, and a related lexical safety-net bug could evict the correct answer once it did.** Confirmed against a real page of NE555N.pdf via `diagnose_multi_symbol_tables.py`/`diagnose_tr_tf_raw_cells.py` (temporary, never committed): the `tr`/`tf` row's Symbol column extracts as `t\nr\nt\nf` (4 lines, since PyMuPDF also splits each packed symbol across its own base+subscript lines) rather than the assumed `tr\ntf` (2 lines) - a first implementation anchored on the Symbol column's own line count broke against this real shape, and would have broken again for any future document with a different line count, per Daniel's explicit review. `_split_multi_symbol_row` (`document_loader.py`) now derives the symbol count from the Parameter column instead, corroborated by at least one value column splitting into that same count, then groups the Symbol column's own lines - however many there are - into that many even chunks, adapting to any lines-per-symbol count rather than a hardcoded one. Live validation then surfaced a second, independent bug: the correct fact was retrieved, but `_apply_lexical_safety_net` (RAG v5.5) evicted it to admit an unrelated page whose lexical score only tied because of a header repeated on nearly every page ("NE555 - SA555 - SE555"), not because it was relevant. The safety net's eviction step now excludes any slot already tied for the best lexical score at sufficient confidence - the same bar a rescue candidate must clear - so it never sacrifices one strong match to admit another equally strong one, and declines to rescue at all when no genuinely weaker slot exists. Both confirmed live: "What is the output rise time of the NE555?" and "What is the output fall time of the NE555?" now each answer correctly and independently, citing page 5. 210 tests passing (13 new since RAG v7.2.1: 11 in `test_document_loader.py` for the multi-symbol split and its redesign, 2 in `test_hybrid_retrieval.py` for the safety-net eviction fix), zero regressions. The NE555N.pdf golden dataset was later extended with two regression cases (`ne555_output_rise_time`/`ne555_output_fall_time`, checking `tr`/`tf` as standalone keyword tokens) that specifically guard against `_split_multi_symbol_row` ever regressing to the original garbled `Symbol: trtf` shape - data added to the existing dataset, no new test functions, count unchanged at 210. Committed as `8a5ad7e`.
+
+**Resolved (RAG v7.3.1, 2026-08-31): a technician had no way to revisit a past question/answer without re-asking it, and fixing that surfaced a refresh-duplication bug live testing caught but the test suite didn't.** New `src/qa_history.py` (SQLite-backed, `data/qa_history.db`, mirroring `chunk_store.py`'s short-lived-connection-per-call pattern): `init_db`, `save_qa_pair` (auto-timestamps unless an explicit `asked_at` is given, for testability), `load_history` (most-recent-first, optional `limit`). Displayed in a right-hand column on the home page (design confirmed with Daniel first: same page, not a separate one) via a two-column flex layout in `templates/index.html`. `webapp.py` loads history in all four routes; `ask()` saves a Q&A pair only on the success path (never on an empty question or an LLM exception). Deliberately scoped OUT: history deletion, pagination, a separate `/history` page. 221 tests passing before live validation.
+
+Live validation (real browser screenshots) then surfaced a bug the green test suite didn't catch: refreshing the page after asking a question resubmitted the form (`/ask` rendered `index.html` directly from the POST), silently duplicating the entry into history and wasting an Ollama call. Daniel questioned whether this was worth fixing rather than accepting it on faith ("porque seria un problema que al refrescar la pagina quede guardado en el resgistro?") - the honest answer: not a correctness/grounding bug, but it crowds the fixed 10-entry history window and wastes compute, a known web anti-pattern with a standard fix. After comparing three options (skip-duplicate patch / full Post-Redirect-Get / document as a known limitation), Daniel confirmed the full PRG pattern. Implemented test-first: `tests/test_webapp.py` updated first (3 tests changed to `follow_redirects=True`, 3 new, the key one asserting `response.status_code == 302`), confirmed red (223 passed, 1 failed - exactly the redirect-status test, as predicted) before writing the fix. `ask()` now stores its outcome in `session["ask_result"]` and redirects to `home()` in all three cases (empty question, LLM error, success) instead of rendering directly; `home()` pops the session value and displays it exactly once, so a later plain `GET /` (e.g. a refresh) never re-shows or re-submits it. Requires `app.secret_key` (static local value - single local user, nothing sensitive stored). `templates/index.html` needed no changes. Confirmed green at 224 tests, then re-validated live: no more "resubmit form?" browser dialog, no duplicate history entries, URL returns to `/` after asking. Committed as a single commit, `d8a7842` (nothing from this feature was committed before the PRG fix was found, so there was no natural point to split it into two commits the way V7.2.1/V7.2.2 were).
+
+A separate, unrelated gap was found during the same live-validation pass and explicitly deferred, not folded into V7.3.1: "What is the maximum collector-emitter voltage?" returns the no-answer fallback even though `sample.pdf` contains the answer verbatim, because the correct chunk (lexical_confidence=0.270, never found semantically) ranks #4 behind three NE555N.pdf chunks sharing generic vocabulary with the query, and production `TOP_K_RESULTS=3` never lets the LLM see it. Confirmed not a regression from the V7.2.2 safety-net fix (0.270 is below the 0.35 safety-net threshold, so it was never in play). Diagnosed with `diagnose_collector_emitter_voltage.py` (temporary, not committed). Not yet assigned a phase number - see `claude/rag-v7-plan.md`'s "New gap found during V7.3.1 live validation" section for the full writeup.
 
 **Known accepted risk (RAG v4, documented, not solved):** chunk metadata (SQLite) and the vector store (ChromaDB) are two separate stores updated in sequence, not inside one transaction. A failure between the two writes could leave a document's metadata and vectors out of sync. Accepted for now given a single local user with no concurrent writers.
 
@@ -61,7 +67,7 @@
 
 **RAG v6: complete (V6.1-V6.3).** All three planned sub-phases are done and validated: document lifecycle control (delete), table-aware extraction, and permanent regression coverage for the exact bug class v5.5/v6.2 found. V6.4 (safety-net threshold recalibration) was deliberately not pursued - see its own phase-table row above for why. See `claude/rag-v6-plan.md` for the full plan and progress log. Remaining, non-blocking follow-up: a fully standalone executable (PyInstaller) so end users don't need Python installed at all - table rows packing more than one symbol per row were resolved in RAG v7.2.2 (see above).
 
-**RAG v7: in progress (V7.1, V7.2.1, V7.2.2 done).** V7.1 (filename display + single delete button), V7.2.1 (measured hybrid retrieval weight tuning), and V7.2.2 (multi-symbol table row splitting plus a lexical safety-net eviction fix) are all done and validated - see their phase-table rows above. Still open: V7.2.3 (safety-net recalibration, deferred pending new evidence), V7.3.1 (persistent Q&A history), and V7.3.2 (conversational follow-up resolution, optional stretch).
+**RAG v7: in progress (V7.1, V7.2.1, V7.2.2, V7.3.1 done).** V7.1 (filename display + single delete button), V7.2.1 (measured hybrid retrieval weight tuning), V7.2.2 (multi-symbol table row splitting plus a lexical safety-net eviction fix), and V7.3.1 (persistent Q&A history plus a Post/Redirect/Get fix for a refresh-duplication bug found via live validation) are all done and validated - see their phase-table rows above. Still open: V7.2.3 (safety-net recalibration, deferred pending new evidence), V7.3.2 (conversational follow-up resolution, optional stretch), and a not-yet-phased cross-document retrieval ranking gap found during V7.3.1's live validation (see the RAG v7.3.1 entry above).
 
 **Observed during V6.1's real smoke test (2026-08-30, not a bug):** deleting a document and immediately re-uploading a file under the same name, right after a fresh app start, was slow enough that Daniel had to cancel and retry once. Consistent with the already-documented one-time embedding-model cold-load cost (see V5.2's performance detour above) - deleting never touches the embedding model, but the very next upload's `generate_embeddings_for_chunks` call can be the first thing in a fresh process to load `sentence-transformers` from disk, whichever action triggers it first. Two immediate retries in the same running process, and a subsequent full app restart, both completed normally - consistent with a one-time cold-start cost, not a defect introduced by the delete feature. Not pursued further per the project's "don't optimize without a measured bottleneck" principle.
 
@@ -121,9 +127,13 @@ Sub-phases, in order:
 - V7.2.3 Safety-Net Threshold Recalibration (round 2) - deferred
   (see phase table above): only revisit `LEXICAL_SAFETY_NET_THRESHOLD`
   if new real evidence appears from V7.2.1/V7.2.2's work
-- V7.3.1 Persistent Q&A History - planned: new `qa_history.py`
-  module (SQLite-backed, mirroring `chunk_store.py`'s
-  single-responsibility pattern)
+- V7.3.1 Persistent Q&A History - done (see phase table above):
+  new `qa_history.py` module (SQLite-backed, mirroring
+  `chunk_store.py`'s single-responsibility pattern), shown in a
+  right-hand column on the home page; also fixed a
+  refresh-duplication bug found via live validation (not
+  designed for up front) using the Post/Redirect/Get pattern on
+  `/ask`
 - V7.3.2 Conversational Follow-Up Resolution - planned, optional
   stretch: new `conversation.py` module, LLM-based query
   rewriting BEFORE retrieval, with a hard grounding rule -
@@ -738,6 +748,26 @@ Must not contain:
 - LLM or prompt logic
 - PDF extraction, cleaning, or chunking logic
 
+### qa_history.py (RAG v7.3.1)
+
+Responsible only for:
+
+- Storing a question/answer pair with its timestamp
+  (`save_qa_pair`) in SQLite (`data/qa_history.db`), mirroring
+  `chunk_store.py`'s short-lived-connection-per-call pattern
+- Loading past Q&A pairs back out, most-recent-first, with an
+  optional `limit` (`load_history`)
+- Creating the underlying table if it doesn't exist yet
+  (`init_db`)
+
+Must not contain:
+
+- Flask routes or session handling (see `webapp.py`)
+- Any decision about WHEN to save or WHAT to display - `webapp.py`
+  decides that (e.g. never saving on an empty question or LLM
+  error, capping the display to `HISTORY_DISPLAY_LIMIT`)
+- Retrieval, ranking, or LLM logic
+
 ### ingestion.py (RAG v4, RAG v6.1)
 
 Responsible only for:
@@ -753,7 +783,7 @@ Must not contain:
 - Embedding computation itself (delegated to embeddings.py) or low-level vector storage details (delegated to vector_store.py) - this module only calls them in the right order
 - Retrieval or LLM logic
 
-### webapp.py (RAG v5, RAG v6.1, RAG v7.1)
+### webapp.py (RAG v5, RAG v6.1, RAG v7.1, RAG v7.3.1)
 
 Responsible only for:
 
@@ -770,6 +800,16 @@ Responsible only for:
   `/delete` form's identifying value)
 - Basic input validation (empty question, missing file, non-PDF
   file) and turning pipeline exceptions into a friendly message
+- Loading and displaying Q&A history (RAG v7.3.1, via
+  `qa_history.load_history`), and saving a new Q&A pair on a
+  successful `/ask` (via `qa_history.save_qa_pair`) - never on an
+  empty question or an LLM error
+- Post/Redirect/Get on `/ask` (RAG v7.3.1): stores the outcome in
+  `session["ask_result"]` and redirects to `home()` instead of
+  rendering the template directly, so refreshing the page after
+  asking a question is a harmless `GET /` instead of a form
+  resubmission; `home()` pops the session value so it displays
+  exactly once
 
 Must not contain:
 
@@ -781,6 +821,9 @@ Must not contain:
   `chunk_store.py`/`vector_store.py`
 - Prompt construction or LLM calls (see `generator.py`,
   `llm.py`)
+- Q&A history persistence logic itself (see `qa_history.py`) -
+  this module only calls `save_qa_pair`/`load_history` at the
+  right points
 
 ## Git Workflow
 
