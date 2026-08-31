@@ -353,4 +353,81 @@ def test_hybrid_retrieve_weighting_can_change_the_final_ranking(monkeypatch):
         lexical_weight=0.1, semantic_weight=5.0,
     )
     assert heavily_semantic[0]["chunk"]["chunk_id"] == 3
+
+def test_lexical_safety_net_does_not_evict_a_result_that_is_itself_tied_for_best_score(monkeypatch):
+    """
+    Real case, NE555N.pdf "output fall time", 2026-08-31: chunk 47
+    (the correctly reconstructed table fact) and chunk 56 (an
+    unrelated page whose lexical score is inflated purely by a
+    boilerplate header repeated on nearly every page) tie for the
+    best raw lexical score. Fusion naturally seats one tied member
+    at the top and another tied member at the bottom of top_k,
+    with a decent-but-not-tied semantic performer in between.
+
+    The safety net must never evict a top_result that is ITSELF
+    tied for the best score (chunk 10 or chunk 40 below) just to
+    admit yet another member of that same evidence class (chunk
+    30) - that trade doesn't fix anything. It must instead sacrifice
+    the one slot that is NOT part of that tied class (chunk 20).
+    """
+    lexical_results = [
+        make_result(10, score=7, confidence=0.5),  # rank 1 - tied, in top_k naturally
+        make_result(30, score=7, confidence=0.5),  # rank 2 - tied, dropped by fusion - the rescue candidate
+        make_result(20, score=4, confidence=0.6),  # rank 3 - NOT tied, decent semantic, should be sacrificed
+        make_result(40, score=7, confidence=0.5),  # rank 4 - tied, kept in top_k by a strong semantic rank
+    ]
+    semantic_results = [
+        make_result(40),  # rank 1
+        make_result(20),  # rank 2
+    ]
+
+    monkeypatch.setattr(
+        "src.hybrid_retrieval.retrieve_relevant_chunks",
+        lambda question, chunks, top_k: lexical_results
+    )
+    monkeypatch.setattr(
+        "src.hybrid_retrieval.semantic_search",
+        lambda question, top_k, collection: semantic_results
+    )
+
+    results = hybrid_retrieve("question", chunks=[], collection=None, top_k=3)
+
+    result_ids = [r["chunk"]["chunk_id"] for r in results]
+    assert 20 not in result_ids, "the non-tied chunk should be the one sacrificed"
+    assert set(result_ids) == {10, 30, 40}, "both original tied members must survive alongside the rescued one"
+
+
+def test_lexical_safety_net_declines_to_rescue_when_every_slot_is_tied_for_best_score(monkeypatch):
+    """
+    Real case, NE555N.pdf "output rise time", 2026-08-31: all three
+    fused top_k slots happen to be tied for the best lexical score
+    (chunks 53, 45, 47 in the real trace). A fourth tied chunk (56)
+    is dropped by fusion and would technically qualify for rescue,
+    but there is no slot left that ISN'T itself part of the same
+    tied, high-confidence evidence class - sacrificing any of them
+    to admit an equally-tied peer would not be a rescue, just a
+    pointless swap. The safety net must leave the results
+    untouched in this case.
+    """
+    lexical_results = [
+        make_result(1, score=7, confidence=0.5),
+        make_result(2, score=7, confidence=0.5),
+        make_result(3, score=7, confidence=0.5),
+        make_result(4, score=7, confidence=0.5),  # dropped by fusion, would-be rescue candidate
+    ]
+    semantic_results = []
+
+    monkeypatch.setattr(
+        "src.hybrid_retrieval.retrieve_relevant_chunks",
+        lambda question, chunks, top_k: lexical_results
+    )
+    monkeypatch.setattr(
+        "src.hybrid_retrieval.semantic_search",
+        lambda question, top_k, collection: semantic_results
+    )
+
+    results = hybrid_retrieve("question", chunks=[], collection=None, top_k=3)
+
+    result_ids = [r["chunk"]["chunk_id"] for r in results]
+    assert result_ids == [1, 2, 3], "no safe slot to sacrifice, so no rescue happens"
     

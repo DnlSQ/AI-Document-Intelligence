@@ -111,9 +111,27 @@ def _apply_lexical_safety_net(top_results, fused_results, lexical_results):
     Among the tied, still-missing candidates that clear
     LEXICAL_SAFETY_NET_THRESHOLD, the first one (in
     lexical_results' own deterministic order) is rescued by
-    replacing the weakest (last) entry in top_results - never by
-    fabricating data, always by looking up that chunk's real fused
-    entry in fused_results first.
+    replacing the weakest slot in top_results that is NOT itself
+    part of the same tied, high-confidence evidence class - never
+    by fabricating data, always by looking up that chunk's real
+    fused entry in fused_results first.
+
+    This protection against evicting a tied member exists because
+    of a second real case (NE555N.pdf "output fall time",
+    2026-08-31): chunk 47 (the correct table fact) and chunk 56
+    (an unrelated page whose lexical score is inflated purely by a
+    boilerplate header repeated on nearly every page of the
+    document) tied for the best raw score. The original version of
+    this function always replaced the single weakest fused slot
+    unconditionally - which happened to be chunk 47 itself, since
+    it was ALSO part of the tied group. That let a coincidental,
+    boilerplate-driven tie evict the chunk that actually held the
+    answer, to make room for another member of the exact same
+    evidence class. Sacrificing one tied, high-confidence chunk to
+    admit another tied, high-confidence chunk fixes nothing - so
+    eviction now specifically searches for the weakest slot that
+    ISN'T part of that tied class. If every current slot belongs to
+    it, there is nothing safe to sacrifice, and no rescue happens.
 
     Args:
         top_results: Final fused results, already truncated to
@@ -124,8 +142,8 @@ def _apply_lexical_safety_net(top_results, fused_results, lexical_results):
             first), as returned by retrieve_relevant_chunks.
 
     Returns:
-        top_results, or a copy with its last entry replaced by
-        the rescued chunk's real fused result.
+        top_results, or a copy with one non-protected entry
+        replaced by the rescued chunk's real fused result.
     """
     if not lexical_results:
         return top_results
@@ -133,6 +151,17 @@ def _apply_lexical_safety_net(top_results, fused_results, lexical_results):
     top_result_ids = {result["chunk"]["chunk_id"] for result in top_results}
 
     best_score = lexical_results[0]["score"]
+
+    # Every lexical result strong enough to itself qualify for
+    # rescue (tied for the best raw score, at or above the
+    # confidence threshold) - regardless of whether it already
+    # made top_results. These are protected from eviction below:
+    # see the docstring's second real-case example for why.
+    protected_ids = {
+        result["chunk"]["chunk_id"] for result in lexical_results
+        if result["score"] == best_score
+        and result["confidence"] >= LEXICAL_SAFETY_NET_THRESHOLD
+    }
 
     candidates = [
         result for result in lexical_results
@@ -157,8 +186,23 @@ def _apply_lexical_safety_net(top_results, fused_results, lexical_results):
     if not top_results:
         return [safety_net_result]
 
-    return top_results[:-1] + [safety_net_result]
+    eviction_index = None
+    for index in range(len(top_results) - 1, -1, -1):
+        if top_results[index]["chunk"]["chunk_id"] not in protected_ids:
+            eviction_index = index
+            break
 
+    if eviction_index is None:
+        # Every current result is itself part of the same
+        # tied-best, high-confidence evidence class the rescue
+        # exists to protect - there is nothing safe to sacrifice.
+        return top_results
+
+    return (
+        top_results[:eviction_index]
+        + [safety_net_result]
+        + top_results[eviction_index + 1:]
+    )
 
 def hybrid_retrieve(
     question, chunks, collection=None, top_k=3,
