@@ -166,6 +166,7 @@ EVALUATION_DATASET = [
 # pattern (see claude/rag-v6-plan.md's Non-goals) - this dataset
 # exists only because NE555N.pdf itself is a permanent, committed
 # reference document, not a real user's transient upload.
+
 NE555N_EVALUATION_DATASET = [
     {
         "id": "ne555_turn_off_time",
@@ -183,6 +184,31 @@ NE555N_EVALUATION_DATASET = [
         "question": "What is the operating supply voltage range of the NE555?",
         "expected_keywords": ["4.5", "16"],
         "description": "Operating supply voltage range",
+        "style": "literal",
+    },
+    {
+        "id": "ne555_output_rise_time",
+        "question": "What is the output rise time of the NE555?",
+        "expected_keywords": ["tr", "rise", "100", "ns"],
+        "description": (
+            "Output rise time (tr) - a table row where the source PDF "
+            "packs two symbols (tr/tf) into one visual row; regression "
+            "guard for RAG v7.2.2's _split_multi_symbol_row fix. If a "
+            "future change breaks the split and it falls back to the "
+            "old garbled 'Symbol: trtf', 'tr' no longer appears as its "
+            "own token and this test fails"
+        ),
+        "style": "literal",
+    },
+    {
+        "id": "ne555_output_fall_time",
+        "question": "What is the output fall time of the NE555?",
+        "expected_keywords": ["tf", "fall", "100", "ns"],
+        "description": (
+            "Output fall time (tf) - same packed tr/tf row as above, "
+            "checked independently since both symbols must resolve to "
+            "separate facts, not just one of the pair"
+        ),
         "style": "literal",
     },
 ]
