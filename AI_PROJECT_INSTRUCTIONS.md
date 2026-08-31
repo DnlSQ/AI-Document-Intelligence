@@ -6,6 +6,7 @@
 **RAG v4: Complete (V4.1-V4.5), persistent incremental storage layer.**
 **RAG v5: Complete (V5.1-V5.5), browser-based interface for technicians.**
 **RAG v6: Complete (V6.1-V6.3), extraction quality and document lifecycle control.**
+**RAG v7: In Progress (V7.1, V7.2.1 done), UI polish and measured retrieval-weight tuning.**
 
 | Phase | Status |
 |---|---|
@@ -39,10 +40,16 @@
 | V6.2 Table-Aware Extraction | Done (2026-08-30 - `document_loader.py` gained `_extract_page_text`/`_reconstruct_table`/`_build_column_labels`/`_clean_cell`; detected tables (`page.find_tables()`) are reconstructed into `Symbol: X \| Parameter: Y \| ...: value \| Unit: Z` lines appended after the page's original plain text, purely additive so pages without tables are unaffected; diagnosed first with a real page of NE555N.pdf via `diagnose_tables.py` rather than guessed; 10 new synthetic tests written test-first, confirmed red (`ImportError`) before implementation; also fixed a latent test-infra gap found along the way - `tests/test_document_loader.py` had zero real tests and was silently executing a real PDF read on every `pytest` run because its name did not match the `*_manual.py` ignore glob, renamed to `tests/test_document_loader_manual.py`; validated live: the NE555N.pdf "turn off time" question that returned the no-answer fallback throughout v5.5 now answers correctly, `0.5 µs`, with no regression on the question that already worked) |
 | V6.3 Golden Dataset Expansion | Done (2026-08-30 - new `NE555N_EVALUATION_DATASET` in `evaluation.py`, kept separate from `EVALUATION_DATASET` since `test_evaluation.py`/`test_retrieval_metrics_real.py` build their corpus from `sample.pdf` alone and would fail if NE555N.pdf questions were mixed in; new `tests/test_evaluation_ne555n.py` mirrors that same real-document pattern, pointed at NE555N.pdf; both questions from v5.5/v6.2 now pass automatically, including the stricter single-chunk `reciprocal_rank` check, turning a manual browser smoke test into permanent regression coverage) |
 | V6.4 Safety-Net Threshold Recalibration | Deliberately not pursued - no new evidence. `LEXICAL_SAFETY_NET_THRESHOLD = 0.35` is still calibrated from only the original two v5.5 cases: V6.2 fixed the `toff` question at the extraction layer, before the safety net is ever consulted, so V6.3 produced no new rescue case to learn from. Revisiting the threshold now would be guessing, not calibrating. |
+| V7.1 UI Cleanup | Done (2026-08-31 - `webapp.py`'s `_document_summary` now returns `display_name` (`os.path.basename(source)`) alongside `source`; `templates/index.html` shows one radio button per document row plus a single `#delete-btn` below the table, disabled until a document is selected, with a dynamic `confirm()` reading the selected row's display name - replacing the earlier per-row delete button; confirmed live in the browser) |
+| V7.2.1 Weighted Hybrid Retrieval (Production Tuning) | Done (2026-08-31 - `hybrid_retrieve` gained optional `lexical_weight`/`semantic_weight` parameters, defaulting to `LEXICAL_WEIGHT = 1.0`/`SEMANTIC_WEIGHT = 1.0` so the fusion mechanism's own tests keep testing the neutral, unweighted formula unchanged; `tests/test_hybrid_weighting_manual.py` measured 5 candidate weight pairs against the full 18-question golden dataset (16 sample.pdf + 2 NE555N.pdf) with real embeddings; `lexical_weight=2.0, semantic_weight=1.0` strictly beat the unweighted baseline on Precision@K/Recall@K/MRR overall and literal-only, and exactly matched it (no regression) on paraphrased questions; `main.py` gained `PRODUCTION_LEXICAL_WEIGHT = 2.0`/`PRODUCTION_SEMANTIC_WEIGHT = 1.0` and `answer_question` now passes them explicitly to `hybrid_retrieve`, kept as an application-level tuning decision separate from the module's own neutral default) |
+| V7.2.2 Multi-Symbol Table Rows | Not started - diagnostic step planned first (same evidence-first approach as `diagnose_tables.py`), to check whether PyMuPDF exposes any more granular data (e.g. per-line bounding boxes) that could disambiguate a row where the source PDF packs two symbols together (e.g. `tr`/`tf`) before attempting a fix |
+| V7.2.3 Safety-Net Threshold Recalibration (round 2) | Deferred - revisit `LEXICAL_SAFETY_NET_THRESHOLD` only if V7.2.1's or V7.2.2's work surfaces a new real rescue case; none has so far |
+| V7.3.1 Persistent Q&A History | Planned - new `qa_history.py` module (SQLite-backed, mirroring `chunk_store.py`'s pattern) so a technician can browse past questions/answers instead of re-asking |
+| V7.3.2 Conversational Follow-Up Resolution | Planned, optional stretch - new `conversation.py` module that rewrites a follow-up question into a standalone one using history, via an LLM call, BEFORE retrieval; history may only resolve references in the current question, never supply answer content directly, to protect grounding |
 
-193 automated tests passing, zero known regressions.
+197 automated tests passing, zero known regressions.
 
-**Known accepted trade-off (measured, not a bug):** unweighted Reciprocal Rank Fusion in hybrid retrieval improves ranking on paraphrased questions (MRR 0.46 vs. 0.42 for lexical alone) but costs ranking quality on literal, datasheet-vocabulary questions (MRR 0.79 vs. a perfect 1.0 for lexical alone) - which are the majority of realistic queries. A dedicated risk check confirmed this never causes the no-answer gate to reject an answerable question. Deliberately left as-is; see README.md's Known Limitations for the full writeup and candidate fixes (weighted RRF, confidence-gated fallback) if this needs revisiting later. Re-run after RAG v4's storage refactor and reproduced the exact same MRR numbers across all 16 questions - confirming v4 changed nothing about retrieval behavior.
+**Resolved (RAG v7.2.1, 2026-08-31): unweighted Reciprocal Rank Fusion in hybrid retrieval was a measured trade-off, not a bug.** It originally improved ranking on paraphrased questions (MRR 0.46 vs. 0.42 for lexical alone) but cost ranking quality on literal, datasheet-vocabulary questions (MRR 0.79 vs. a perfect 1.0 for lexical alone) - the majority of realistic queries. A dedicated risk check had confirmed this never caused the no-answer gate to reject an answerable question, so it was deliberately left unweighted until real evidence justified a change (re-run after RAG v4's storage refactor, reproducing the exact same MRR numbers - confirming v4 changed nothing about retrieval behavior). `hybrid_retrieve` now accepts optional `lexical_weight`/`semantic_weight` (see phase table above); `tests/test_hybrid_weighting_manual.py` measured candidates against the expanded 18-question golden dataset and found `lexical_weight=2.0, semantic_weight=1.0` strictly better than the unweighted baseline overall and literal-only, with zero regression on paraphrased questions. `main.py` now requests this tuning in production. See README.md's Known Limitations for the full numbers.
 
 **Known accepted risk (RAG v4, documented, not solved):** chunk metadata (SQLite) and the vector store (ChromaDB) are two separate stores updated in sequence, not inside one transaction. A failure between the two writes could leave a document's metadata and vectors out of sync. Accepted for now given a single local user with no concurrent writers.
 
@@ -50,7 +57,9 @@
 
 **Resolved (RAG v6.2, 2026-08-30): PDF table extraction losing column structure.** The limitation surfaced by v5.5 above is fixed. `diagnose_tables.py` (temporary, never committed) confirmed against a real page of NE555N.pdf that PyMuPDF's `page.find_tables()` does recover the row/column structure that `page.get_text()` throws away - the `toff` row extracted cleanly as `['t\noff', 'Turn off time (5) (V = V )\nreset CC', '', '0.5', '', '', '0.5', '', 'µs']`, with headers split across two merged rows and subscripted characters split onto their own cell line. `document_loader.py` now reconstructs each detected real table (2+ rows, filtering out degenerate 1-row artifacts like a page footer PyMuPDF also detects) into explicit `Symbol: X | Parameter: Y | ...: value | Unit: Z` facts, appended after the page's original plain text - purely additive, so any page without a table is provably unaffected. Validated with 191 tests (10 new, zero regressions) and live: the exact question that returned the no-answer fallback throughout v5.5 ("What is the turn off time of the NE555?") now answers correctly and grounded ("0.5 µs, Source: NE555N, page 5"), with no regression on the question that already worked. Known, accepted remaining gap: a table row where the source PDF packs two symbols into one visual row (e.g. `tr`/`tf`) does not split cleanly - not recoverable from `extract()`'s text alone without per-line bounding boxes, and no worse than pre-v6.2 behavior for that case.
 
-**RAG v6: complete (V6.1-V6.3).** All three planned sub-phases are done and validated: document lifecycle control (delete), table-aware extraction, and permanent regression coverage for the exact bug class v5.5/v6.2 found. V6.4 (safety-net threshold recalibration) was deliberately not pursued - see its own phase-table row above for why. See `claude/rag-v6-plan.md` for the full plan and progress log. Remaining, non-blocking follow-ups: revisiting hybrid retrieval's fusion weighting and tie-break signals more broadly, reconstructing table rows that pack more than one symbol per row, and a fully standalone executable (PyInstaller) so end users don't need Python installed at all.
+**RAG v6: complete (V6.1-V6.3).** All three planned sub-phases are done and validated: document lifecycle control (delete), table-aware extraction, and permanent regression coverage for the exact bug class v5.5/v6.2 found. V6.4 (safety-net threshold recalibration) was deliberately not pursued - see its own phase-table row above for why. See `claude/rag-v6-plan.md` for the full plan and progress log. Remaining, non-blocking follow-ups: reconstructing table rows that pack more than one symbol per row, and a fully standalone executable (PyInstaller) so end users don't need Python installed at all.
+
+**RAG v7: in progress (V7.1, V7.2.1 done).** V7.1 (filename display + single delete button) and V7.2.1 (measured hybrid retrieval weight tuning) are both done and validated - see their phase-table rows above. Still open: V7.2.2 (multi-symbol table rows), V7.2.3 (safety-net recalibration, deferred pending new evidence), V7.3.1 (persistent Q&A history), and V7.3.2 (conversational follow-up resolution, optional stretch).
 
 **Observed during V6.1's real smoke test (2026-08-30, not a bug):** deleting a document and immediately re-uploading a file under the same name, right after a fresh app start, was slow enough that Daniel had to cancel and retry once. Consistent with the already-documented one-time embedding-model cold-load cost (see V5.2's performance detour above) - deleting never touches the embedding model, but the very next upload's `generate_embeddings_for_chunks` call can be the first thing in a fresh process to load `sentence-transformers` from disk, whichever action triggers it first. Two immediate retries in the same running process, and a subsequent full app restart, both completed normally - consistent with a one-time cold-start cost, not a defect introduced by the delete feature. Not pursued further per the project's "don't optimize without a measured bottleneck" principle.
 
@@ -72,6 +81,61 @@ Explicitly OUT of scope for RAG v6:
 - Full standalone packaging (PyInstaller) - a packaging concern, unrelated to data/extraction quality
 - Auto-installing Python/Ollama/the model - already discussed and declined during v5
 - A general RRF re-weighting overhaul - not yet justified by data volume
+
+Must remain:
+
+- 100% local
+- 100% free
+- No JavaScript framework required
+
+### RAG v7 Rules
+
+Only start after V6 is stable (it now is - see Current Status above).
+
+Focus: three areas confirmed with Daniel before starting - UI/UX
+cleanup, deeper retrieval quality (grounded in real measurement,
+not guesses), and giving a technician a way to revisit past
+questions/answers without re-asking, plus an optional step
+towards resolving conversational follow-up questions.
+
+Sub-phases, in order:
+
+- V7.1 UI Cleanup - done (see phase table above): document
+  filename display instead of full path, single delete button
+  instead of one per row
+- V7.2.1 Weighted Hybrid Retrieval (Production Tuning) - done
+  (see phase table above): `hybrid_retrieve` gained optional,
+  backward-compatible RRF weights; the production weighting
+  itself was decided from real measurement
+  (`tests/test_hybrid_weighting_manual.py`) against the full
+  golden dataset, never guessed
+- V7.2.2 Multi-Symbol Table Rows - not started (see phase table
+  above): diagnose first, same evidence-first approach as
+  `diagnose_tables.py`, before attempting any fix
+- V7.2.3 Safety-Net Threshold Recalibration (round 2) - deferred
+  (see phase table above): only revisit `LEXICAL_SAFETY_NET_THRESHOLD`
+  if new real evidence appears from V7.2.1/V7.2.2's work
+- V7.3.1 Persistent Q&A History - planned: new `qa_history.py`
+  module (SQLite-backed, mirroring `chunk_store.py`'s
+  single-responsibility pattern)
+- V7.3.2 Conversational Follow-Up Resolution - planned, optional
+  stretch: new `conversation.py` module, LLM-based query
+  rewriting BEFORE retrieval, with a hard grounding rule -
+  history may only resolve references in the current question
+  (e.g. "what about its storage temperature?" after asking about
+  a specific part), never supply answer content directly without
+  going through retrieval again
+
+Explicitly OUT of scope for RAG v7:
+
+- Any change to the RAG v1-v6 architecture beyond hybrid
+  retrieval's own optional weight parameters
+- A general-purpose conversational agent - V7.3.2, if pursued,
+  only resolves references for retrieval, it does not let the
+  model answer from memory
+- Full standalone packaging (PyInstaller) - unrelated to this
+  phase's focus, tracked separately (see RAG v6's closure note
+  above)
 
 Must remain:
 
@@ -623,11 +687,12 @@ Must not contain:
 - Vector storage logic (see vector_store.py)
 - LLM logic or prompt construction
 
-### hybrid_retrieval.py
+### hybrid_retrieval.py (RAG v3.4, RAG v7.2.1)
 
 Responsible only for:
 
 - Combining lexical retrieval (retriever.py) and semantic search (semantic_search.py) results into a single ranked list, using Reciprocal Rank Fusion (RRF)
+- Accepting optional `lexical_weight`/`semantic_weight` parameters (RAG v7.2.1) to scale each method's RRF contribution before summing - both default to the module's own neutral `LEXICAL_WEIGHT = 1.0`/`SEMANTIC_WEIGHT = 1.0`, reproducing the original unweighted formula exactly. The PRODUCTION-tuned values (2.0/1.0, measured via `tests/test_hybrid_weighting_manual.py`) are an application-level decision that belongs to `main.py` (`PRODUCTION_LEXICAL_WEIGHT`/`PRODUCTION_SEMANTIC_WEIGHT`), not to this module's own default
 
 Must not contain:
 
@@ -675,7 +740,7 @@ Must not contain:
 - Embedding computation itself (delegated to embeddings.py) or low-level vector storage details (delegated to vector_store.py) - this module only calls them in the right order
 - Retrieval or LLM logic
 
-### webapp.py (RAG v5, RAG v6.1)
+### webapp.py (RAG v5, RAG v6.1, RAG v7.1)
 
 Responsible only for:
 
@@ -685,7 +750,11 @@ Responsible only for:
 - Lazy-singleton in-memory state (`_get_state`), initialized
   once from `main.initialize_system` and refreshed after an
   upload, guarded by a `threading.Lock()`
-- Summarizing loaded documents for display
+- Summarizing loaded documents for display, including a
+  `display_name` (`os.path.basename(source)`, RAG v7.1) shown to
+  the technician instead of the full document path - `source`
+  itself is unchanged and still used internally (e.g. as the
+  `/delete` form's identifying value)
 - Basic input validation (empty question, missing file, non-PDF
   file) and turning pipeline exceptions into a friendly message
 

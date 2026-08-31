@@ -181,7 +181,7 @@ assumed.
 - sentence-transformers (local embedding model)
 - ChromaDB (local, persistent vector store)
 - SQLite (persistent chunk metadata)
-- pytest (193 automated tests)
+- pytest (197 automated tests)
 - Git
 - PowerShell
 - Local LLM inference
@@ -194,6 +194,7 @@ assumed.
 **RAG v4: Complete (V4.1 - V4.5), persistent incremental storage layer.**
 **RAG v5: Complete (V5.1 - V5.5), browser-based interface for technicians.**
 **RAG v6: Complete (V6.1 - V6.3), extraction quality and document lifecycle control.**
+**RAG v7: In Progress (V7.1, V7.2.1 done), UI polish and measured retrieval-weight tuning.**
 
 The system ingests one or more PDF documents, cleans and
 chunks their text, and retrieves the most relevant passages
@@ -236,16 +237,16 @@ datasheet): uploading it through the browser made it
 searchable immediately, with no restart needed.
 
 Retrieval quality is measured automatically and
-comparatively, not just assumed: **193 automated tests**
+comparatively, not just assumed: **197 automated tests**
 currently pass, including a golden-dataset evaluation across
 16 questions (12 matching the document's own technical
 vocabulary, 4 deliberately paraphrased in natural language)
 and IR-style retrieval metrics (Precision@K, Recall@K, Mean
 Reciprocal Rank) computed independently for lexical, semantic,
-and hybrid retrieval. This comparison surfaced a real, measured
-trade-off - see Known Limitations below - which was
-investigated with a dedicated risk check before deciding how
-to respond to it.
+and hybrid retrieval. This comparison originally surfaced a
+real, measured trade-off - investigated with a dedicated risk
+check, and later addressed with real evidence rather than a
+guess (RAG v7.2.1) - see Known Limitations below.
 
 As of RAG v6.2, PDF extraction is table-aware: pages are still
 extracted as plain text as before, but any table PyMuPDF can
@@ -258,6 +259,26 @@ consistently returned the no-answer fallback under the
 flattened extraction ("What is the turn off time of the
 NE555?") now answers correctly ("0.5 µs, Source: NE555N, page
 5") with no regression on the question that already worked.
+
+As of RAG v7.1, the browser interface shows each loaded document
+by its filename only (not the full local path it's stored at),
+and document deletion is a single button below the documents
+table - enabled once a document is selected via radio button,
+and confirmed with a dynamic prompt naming the selected file -
+replacing the earlier per-row delete button design.
+
+As of RAG v7.2.1, hybrid retrieval's Reciprocal Rank Fusion
+accepts configurable weights for its lexical and semantic
+contributions (defaulting to the original unweighted 1.0/1.0
+formula). Measured against the full 18-question golden dataset
+(16 sample.pdf + 2 NE555N.pdf questions), a production
+weighting of lexical_weight=2.0/semantic_weight=1.0 strictly
+improves Precision@K, Recall@K, and MRR over the unweighted
+formula for both the overall dataset and literal
+(datasheet-vocabulary) questions, while exactly matching the
+unweighted baseline - no regression - on paraphrased questions.
+This addresses the trade-off previously documented in Known
+Limitations below with real measurement instead of a guess.
 
 ## Current Progress
 
@@ -304,29 +325,44 @@ NE555?") now answers correctly ("0.5 µs, Source: NE555N, page
       questions from the v5.5/v6.2 investigation are now a
       permanent automated regression check, not a manual
       browser smoke test)
+- [x] Document filename display + single-button delete UI
+      (RAG v7.1 - shows `display_name` instead of the full
+      document path, one delete button below the table instead
+      of one per row)
+- [x] Configurable, measured hybrid retrieval weighting
+      (RAG v7.2.1 - `hybrid_retrieve` accepts optional
+      `lexical_weight`/`semantic_weight`; production tuned to
+      2.0/1.0 based on real measurement against the full golden
+      dataset, see Known Limitations below)
 
 ## Known Limitations
 
-- **Unweighted hybrid retrieval fusion is a measured
-  trade-off, not a bug:** Reciprocal Rank Fusion currently
-  weights lexical and semantic retrieval equally. Measured on
-  a 16-question golden dataset: this improves ranking on
-  paraphrased, natural-language questions (Mean Reciprocal
-  Rank 0.46 vs. 0.42 for lexical alone) but costs ranking
-  quality on literal, datasheet-vocabulary questions (MRR
-  0.79 vs. a perfect 1.0 for lexical alone) - which make up
-  the majority of realistic troubleshooting queries. A
-  dedicated risk check confirmed this never causes the system
-  to reject an answerable question (the no-answer confidence
-  gate stayed comfortably above threshold in every measured
-  case), and the generator receives every retrieved chunk as
-  context regardless of exact rank, so answer correctness is
-  governed mainly by recall, which stayed healthy throughout.
-  Left unweighted deliberately for now; candidates for a
-  future fix (weighted RRF, or falling back to hybrid only
-  when lexical confidence is low) are documented but not
-  implemented, since the measured real-world impact doesn't
-  currently justify the engineering cost.
+- **Resolved (RAG v7.2.1): unweighted hybrid retrieval fusion
+  was a measured trade-off, not a bug.** Reciprocal Rank Fusion
+  originally weighted lexical and semantic retrieval equally.
+  Measured on the original 16-question golden dataset, this
+  improved ranking on paraphrased, natural-language questions
+  (MRR 0.46 vs. 0.42 for lexical alone) but cost ranking
+  quality on literal, datasheet-vocabulary questions (MRR 0.79
+  vs. a perfect 1.0 for lexical alone) - which make up the
+  majority of realistic troubleshooting queries. A dedicated
+  risk check confirmed this never caused the system to reject
+  an answerable question, so it was deliberately left unweighted
+  until real evidence justified a change. `hybrid_retrieve` now
+  accepts optional `lexical_weight`/`semantic_weight` parameters
+  (defaulting to the original unweighted 1.0/1.0, so the fusion
+  mechanism's own tests stay unaffected), and
+  `tests/test_hybrid_weighting_manual.py` measured several
+  candidates against the expanded 18-question golden dataset
+  (16 sample.pdf + 2 NE555N.pdf). `lexical_weight=2.0,
+  semantic_weight=1.0` strictly beat the unweighted baseline on
+  Precision@K, Recall@K, and MRR overall and on literal-only
+  questions (e.g. MRR 0.70 -> 0.76 overall, 0.76 -> 0.83
+  literal-only), while exactly matching the baseline on
+  paraphrased questions - no regression. `main.py`'s
+  `answer_question` now requests this tuned weighting in
+  production, kept as an application-level decision separate
+  from the fusion module's own neutral default.
 - **Confidence is a lexical/semantic signal, not a true
   probability:** it can't perfectly distinguish a real (if
   generic) match from a coincidental one. It catches
@@ -443,16 +479,21 @@ technicians:
 5. Reduce diagnosis time
 6. Improve equipment recovery time
 
-Open, non-blocking follow-ups: revisiting hybrid retrieval's
-fusion weighting and tie-break signals more broadly now that
-two separate ties surfaced in one investigation, reconstructing
-table rows where the source PDF packs more than one symbol
-into a single visual row (see Known Limitations above),
-safety-net threshold recalibration if a new real rescue case
-ever appears (RAG v6.4, deliberately not pursued yet - see
-Known Limitations), and a fully standalone
-executable (no separate Python installation required, most
-likely via PyInstaller).
+RAG v7 is in progress: V7.1 (filename display + single delete
+button) and V7.2.1 (measured hybrid retrieval weight tuning,
+see Known Limitations above) are both done. Still open: V7.2.2
+(reconstructing table rows where the source PDF packs more than
+one symbol into a single visual row - see Known Limitations
+above), and two new technician-facing features - a persistent
+question/answer history (V7.3.1) and, as an optional stretch,
+resolving conversational follow-up questions before retrieval
+(V7.3.2).
+
+Open, non-blocking follow-ups: safety-net threshold
+recalibration if a new real rescue case ever appears (RAG v6.4,
+deliberately not pursued yet - see Known Limitations), and a
+fully standalone executable (no separate Python installation
+required, most likely via PyInstaller).
 
 ## Author
 
