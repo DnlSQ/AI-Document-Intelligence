@@ -86,32 +86,107 @@ def _reconstruct_table(table):
 
     lines = []
     for row in rows[first_data_row:]:
-        symbol = _clean_cell(row[0], join_with_space=False)
+        for sub_row in _split_multi_symbol_row(row) or [row]:
+            symbol = _clean_cell(sub_row[0], join_with_space=False)
 
-        if not symbol:
-            continue
-
-        parameter = _clean_cell(row[1], join_with_space=True)
-
-        parts = [f"Symbol: {symbol}"]
-        if parameter:
-            parts.append(f"Parameter: {parameter}")
-
-        for column_index in range(2, len(row)):
-            value = _clean_cell(row[column_index], join_with_space=True)
-            if not value:
+            if not symbol:
                 continue
-            label = (
-                column_labels[column_index]
-                if column_index < len(column_labels)
-                else f"Column {column_index}"
-            )
-            parts.append(f"{label}: {value}")
 
-        lines.append(" | ".join(parts))
+            parameter = _clean_cell(sub_row[1], join_with_space=True)
+
+            parts = [f"Symbol: {symbol}"]
+            if parameter:
+                parts.append(f"Parameter: {parameter}")
+
+            for column_index in range(2, len(sub_row)):
+                value = _clean_cell(sub_row[column_index], join_with_space=True)
+                if not value:
+                    continue
+                label = (
+                    column_labels[column_index]
+                    if column_index < len(column_labels)
+                    else f"Column {column_index}"
+                )
+                parts.append(f"{label}: {value}")
+
+            lines.append(" | ".join(parts))
 
     return "\n".join(lines)
 
+def _split_multi_symbol_row(row):
+    """
+    Splits one table row that packs multiple symbols into a single
+    visual row (e.g. "tr"/"tf" sharing one row, confirmed via
+    diagnose_multi_symbol_tables.py, 2026-08-31, against a real page
+    of NE555N.pdf) into one independent row per symbol.
+
+    The number of symbols (N) is derived from the Parameter column's
+    line count, corroborated by at least one OTHER (value) column
+    splitting into that same count - never from the Symbol column
+    itself, which is unreliable: PyMuPDF can split EACH packed
+    symbol across its own base+subscript lines too (e.g. "tr"
+    renders as "t\\nr", "tf" as "t\\nf", giving 4 raw lines for 2
+    symbols, not 2 - the real shape found in NE555N.pdf's tr/tf
+    row). Once N is known, the Symbol column's lines - however many
+    there are - are grouped into N equal chunks (as long as the
+    total divides evenly by N) and each chunk is joined with no
+    separator, the same reconstruction _clean_cell already does for
+    a single subscript-split symbol like "t\\noff" - this adapts to
+    any number of lines per symbol, not just a hardcoded 1 or 2.
+
+    Deliberately strict about corroboration, so this never misfires
+    on a single symbol whose Parameter cell merely wraps across
+    multiple lines with no real per-symbol values behind it (e.g.
+    VOH's Parameter cell wraps to 7 lines describing several
+    measurement conditions under the ONE symbol - none of its value
+    columns also split into 7 lines, so it's correctly left alone).
+
+    Returns a list of new rows (each the same length as the input,
+    one per symbol) if the row decomposes cleanly, or None if it
+    should be processed as a single row exactly as before.
+    """
+    def cell_lines(cell):
+        return [line.strip() for line in (cell or "").split("\n") if line.strip()]
+
+    parameter_lines = cell_lines(row[1])
+    symbol_count = len(parameter_lines)
+
+    if symbol_count <= 1:
+        return None
+
+    split_columns = {1: parameter_lines}
+    has_corroborating_column = False
+
+    for column_index, cell in enumerate(row):
+        if column_index in (0, 1):
+            continue
+        lines = cell_lines(cell)
+        if len(lines) == symbol_count:
+            has_corroborating_column = True
+            split_columns[column_index] = lines
+        elif len(lines) <= 1:
+            shared_value = lines[0] if lines else ""
+            split_columns[column_index] = [shared_value] * symbol_count
+        else:
+            return None
+
+    if not has_corroborating_column:
+        return None
+
+    symbol_lines = cell_lines(row[0])
+    if len(symbol_lines) < symbol_count or len(symbol_lines) % symbol_count != 0:
+        return None
+
+    lines_per_symbol = len(symbol_lines) // symbol_count
+    split_columns[0] = [
+        "".join(symbol_lines[i * lines_per_symbol:(i + 1) * lines_per_symbol])
+        for i in range(symbol_count)
+    ]
+
+    return [
+        [split_columns[column_index][i] for column_index in range(len(row))]
+        for i in range(symbol_count)
+    ]
 
 def _build_column_labels(table_rows):
     """

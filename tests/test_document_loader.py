@@ -17,6 +17,7 @@ from src.document_loader import (
     _build_column_labels,
     _reconstruct_table,
     _extract_page_text,
+    _split_multi_symbol_row,
 )
 
 
@@ -142,4 +143,140 @@ def test_extract_page_text_falls_back_when_only_degenerate_tables_detected():
     page = FakePage(plain_text, tables=[footer_table])
 
     assert _extract_page_text(page) == plain_text
+
+# The real row shape confirmed by diagnose_multi_symbol_tables.py
+# (RAG v7.2.2) against NE555N.pdf, page 5: "tr" and "tf" (Output
+# rise/fall time) share one visual table row, with every value
+# column split into two matching lines - one per symbol - unlike
+# toff's "t\noff" (one symbol split by a subscript, whose Parameter
+# cell just happens to wrap across two lines too, but no value
+# column splits to match).
+NE555_TR_TF_TABLE_ROWS = [
+    ["Symbol", "Parameter", "SE555", None, None, "NE555 - SA555", None, None, "Unit"],
+    [None, None, "Min.", "Typ.", "Max.", "Min.", "Typ.", "Max.", None],
+    ["tr\ntf", "Output rise time\nOutput fall time", "100\n100", "200\n200", "", "100\n100", "300\n300", "", "ns"],
+]
+
+
+def test_split_multi_symbol_row_splits_matching_symbol_and_parameter_lines():
+    row = NE555_TR_TF_TABLE_ROWS[2]
+
+    sub_rows = _split_multi_symbol_row(row)
+
+    assert len(sub_rows) == 2
+    assert sub_rows[0][0] == "tr"
+    assert sub_rows[0][1] == "Output rise time"
+    assert sub_rows[1][0] == "tf"
+    assert sub_rows[1][1] == "Output fall time"
+
+
+def test_split_multi_symbol_row_assigns_matching_per_symbol_values():
+    sub_rows = _split_multi_symbol_row(NE555_TR_TF_TABLE_ROWS[2])
+
+    # Column 2 = SE555 Min. ("100\n100"), column 6 = NE555 Typ. ("300\n300")
+    assert sub_rows[0][2] == "100"
+    assert sub_rows[1][2] == "100"
+    assert sub_rows[0][6] == "300"
+    assert sub_rows[1][6] == "300"
+
+
+def test_split_multi_symbol_row_broadcasts_shared_single_line_columns():
+    sub_rows = _split_multi_symbol_row(NE555_TR_TF_TABLE_ROWS[2])
+
+    # Column 8 = Unit ("ns"), a single value shared by both symbols.
+    assert sub_rows[0][8] == "ns"
+    assert sub_rows[1][8] == "ns"
+
+
+def test_split_multi_symbol_row_returns_none_for_a_single_symbol_split_by_subscript():
+    """
+    toff's Parameter cell happens to wrap across 2 lines too (same
+    count as its "t\\noff" symbol split), but none of its value
+    columns split to match - the corroborating evidence tr/tf has
+    and toff doesn't. Must NOT be mistaken for a packed multi-symbol
+    row, or the already-correct toff fact would be destroyed.
+    """
+    toff_row = NE555_TOFF_TABLE_ROWS[2]
+
+    assert _split_multi_symbol_row(toff_row) is None
+
+
+def test_split_multi_symbol_row_returns_none_when_parameter_count_does_not_match():
+    row = [
+        "V\nOH",
+        "High level output voltage\nsome extra condition\nanother condition",
+        "13", "12.5", "", "12.7", "12.5", "", "V",
+    ]
+
+    assert _split_multi_symbol_row(row) is None
+
+
+def test_split_multi_symbol_row_returns_none_when_a_value_column_count_is_inconsistent():
+    row = ["tr\ntf", "Output rise time\nOutput fall time", "100\n200\n300", "", "", "", "", "", "ns"]
+
+    assert _split_multi_symbol_row(row) is None
+
+
+def test_split_multi_symbol_row_returns_none_for_a_normal_single_line_symbol():
+    row = ["toff", "Turn off time", "", "0.5", "", "", "0.5", "", "µs"]
+
+    assert _split_multi_symbol_row(row) is None
+
+
+def test_reconstruct_table_produces_separate_facts_for_a_packed_multi_symbol_row():
+    table = FakeTable(NE555_TR_TF_TABLE_ROWS)
+
+    reconstructed = _reconstruct_table(table)
+
+    assert "Symbol: tr | Parameter: Output rise time" in reconstructed
+    assert "Symbol: tf | Parameter: Output fall time" in reconstructed
+    assert "SE555 Typ.: 200" in reconstructed
+    assert "NE555 - SA555 Typ.: 300" in reconstructed
+    assert "Unit: ns" in reconstructed
+    # Never merged into one garbled identifier.
+    assert "Symbol: trtf" not in reconstructed
+
+
+def test_reconstruct_table_still_reconstructs_toff_correctly_when_a_packed_row_is_also_present():
+    """
+    Regression check: a table containing BOTH a packed multi-symbol
+    row (tr/tf) and a normal single-symbol row (toff) - the real
+    shape of NE555N.pdf's page 5 table - must reconstruct both
+    correctly, with no cross-contamination between them.
+    """
+    combined_rows = NE555_TR_TF_TABLE_ROWS[:2] + [NE555_TR_TF_TABLE_ROWS[2], NE555_TOFF_TABLE_ROWS[2]]
+    table = FakeTable(combined_rows)
+
+    reconstructed = _reconstruct_table(table)
+
+    assert "Symbol: tr |" in reconstructed
+    assert "Symbol: tf |" in reconstructed
+    assert "Symbol: toff |" in reconstructed
+
+def test_split_multi_symbol_row_regroups_symbol_lines_when_each_symbol_is_itself_subscript_split():
+    """
+    RAG v7.2.2 round 2: PyMuPDF can split EACH packed symbol across
+    its own base+subscript lines too (e.g. "tr" renders as "t\\nr",
+    "tf" as "t\\nf", giving a packed cell of 4 lines total for 2
+    symbols, not 2) - the real shape confirmed against NE555N.pdf's
+    tr/tf row. The count must come from the corroborating
+    Parameter/value columns, then the Symbol column's lines are
+    grouped into that many equal chunks - 4 lines / 2 symbols = 2
+    lines per symbol here, but this adapts to any divisible count.
+    """
+    row = ["t\nr\nt\nf", "Output rise time\nOutput fall time", "100\n100", "200\n200", "", "100\n100", "300\n300", "", "ns"]
+
+    sub_rows = _split_multi_symbol_row(row)
+
+    assert sub_rows is not None
+    assert sub_rows[0][0] == "tr"
+    assert sub_rows[1][0] == "tf"
+    assert sub_rows[0][1] == "Output rise time"
+    assert sub_rows[1][1] == "Output fall time"
+
+
+def test_split_multi_symbol_row_returns_none_when_symbol_lines_do_not_divide_evenly():
+    row = ["t\nr\nt", "Output rise time\nOutput fall time", "100\n100", "", "", "", "", "", "ns"]
+
+    assert _split_multi_symbol_row(row) is None
     
