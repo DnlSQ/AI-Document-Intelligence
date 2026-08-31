@@ -8,11 +8,12 @@
         h1 { font-size: 1.4rem; }
         table { border-collapse: collapse; width: 100%; margin-top: 1rem; }
         th, td { text-align: left; padding: 0.4rem 0.6rem; border-bottom: 1px solid #ddd; }
+        th:first-child, td:first-child { width: 2rem; }
         .empty { color: #666; font-style: italic; }
         form.ask-form { margin-top: 1.5rem; display: flex; gap: 0.5rem; }
         form.ask-form input[type="text"] { flex: 1; padding: 0.4rem; }
         form.upload-form { margin-top: 1rem; display: flex; gap: 0.5rem; align-items: center; }
-        form.delete-form { display: inline; margin: 0; }
+        #delete-btn { margin-top: 0.8rem; }
         .answer-box { margin-top: 1rem; padding: 0.8rem; background: #f4f4f4; border-radius: 4px; }
         .answer-box .question { font-weight: bold; margin-bottom: 0.4rem; }
         .error-box { margin-top: 1rem; padding: 0.8rem; background: #fdecea; color: #7a1f1f; border-radius: 4px; }
@@ -40,21 +41,45 @@
 
     <h2>Loaded documents</h2>
     {% if documents %}
-    <table>
-        <tr><th>Document</th><th>Chunks</th><th></th></tr>
-        {% for doc in documents %}
-        <tr>
-            <td>{{ doc.source }}</td>
-            <td>{{ doc.chunk_count }}</td>
-            <td>
-                <form class="delete-form" method="post" action="/delete" onsubmit="return confirm('Delete {{ doc.source }}? This cannot be undone.');">
-                    <input type="hidden" name="source" value="{{ doc.source }}">
-                    <button type="submit">Delete</button>
-                </form>
-            </td>
-        </tr>
-        {% endfor %}
-    </table>
+    <form method="post" action="/delete" id="delete-form">
+        <table>
+            <tr><th></th><th>Document</th><th>Chunks</th></tr>
+            {% for doc in documents %}
+            <tr>
+                <td><input type="radio" name="source" value="{{ doc.source }}" class="delete-radio"></td>
+                <td>{{ doc.display_name }}</td>
+                <td>{{ doc.chunk_count }}</td>
+            </tr>
+            {% endfor %}
+        </table>
+        <button type="submit" id="delete-btn" disabled>Delete selected document</button>
+    </form>
+    <script>
+        (function () {
+            var radios = document.querySelectorAll(".delete-radio");
+            var deleteBtn = document.getElementById("delete-btn");
+            var deleteForm = document.getElementById("delete-form");
+
+            radios.forEach(function (radio) {
+                radio.addEventListener("change", function () {
+                    deleteBtn.disabled = false;
+                });
+            });
+
+            deleteForm.addEventListener("submit", function (event) {
+                var selected = deleteForm.querySelector(".delete-radio:checked");
+                if (!selected) {
+                    event.preventDefault();
+                    return;
+                }
+                var row = selected.closest("tr");
+                var name = row ? row.children[1].textContent : "the selected document";
+                if (!confirm("Delete " + name + "? This cannot be undone.")) {
+                    event.preventDefault();
+                }
+            });
+        })();
+    </script>
     {% else %}
     <p class="empty">No documents loaded yet.</p>
     {% endif %}

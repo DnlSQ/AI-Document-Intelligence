@@ -37,7 +37,11 @@ def _document_summary(chunks):
         source = chunk["source"]
         counts[source] = counts.get(source, 0) + 1
     return [
-        {"source": source, "chunk_count": count}
+        {
+            "source": source,
+            "display_name": os.path.basename(source),
+            "chunk_count": count,
+        }
         for source, count in sorted(counts.items())
     ]
 

@@ -31,22 +31,39 @@ def reset_state(monkeypatch):
 
 def test_document_summary_groups_by_source_and_counts_chunks():
     chunks = [
-        {"chunk_id": 1, "page": 1, "text": "a", "source": "b.pdf"},
-        {"chunk_id": 2, "page": 1, "text": "b", "source": "a.pdf"},
-        {"chunk_id": 3, "page": 2, "text": "c", "source": "a.pdf"},
+        {"chunk_id": 1, "page": 1, "text": "a", "source": "data/documents/b.pdf"},
+        {"chunk_id": 2, "page": 1, "text": "b", "source": "data/documents/a.pdf"},
+        {"chunk_id": 3, "page": 2, "text": "c", "source": "data/documents/a.pdf"},
     ]
 
     summary = webapp._document_summary(chunks)
 
     assert summary == [
-        {"source": "a.pdf", "chunk_count": 2},
-        {"source": "b.pdf", "chunk_count": 1},
+        {"source": "data/documents/a.pdf", "display_name": "a.pdf", "chunk_count": 2},
+        {"source": "data/documents/b.pdf", "display_name": "b.pdf", "chunk_count": 1},
     ]
 
 
 def test_document_summary_returns_empty_list_for_no_chunks():
     assert webapp._document_summary([]) == []
 
+
+def test_document_summary_display_name_strips_directory_path():
+    """
+    RAG v7.1: the browser should show just the filename, not the full
+    storage path - display_name is for showing, source (the full
+    path) is still what gets submitted to /upload's replace-by-name
+    matching and /delete, unchanged.
+    """
+    chunks = [
+        {"chunk_id": 1, "page": 1, "text": "a", "source": "data/documents/NE555N.pdf"},
+    ]
+
+    summary = webapp._document_summary(chunks)
+
+    assert summary == [
+        {"source": "data/documents/NE555N.pdf", "display_name": "NE555N.pdf", "chunk_count": 1},
+    ]
 
 # ---------------------------------------------------------------
 # _get_state - lazy singleton
