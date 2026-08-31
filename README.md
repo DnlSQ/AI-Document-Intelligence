@@ -181,7 +181,7 @@ assumed.
 - sentence-transformers (local embedding model)
 - ChromaDB (local, persistent vector store)
 - SQLite (persistent chunk metadata)
-- pytest (197 automated tests)
+- pytest (210 automated tests)
 - Git
 - PowerShell
 - Local LLM inference
@@ -194,7 +194,7 @@ assumed.
 **RAG v4: Complete (V4.1 - V4.5), persistent incremental storage layer.**
 **RAG v5: Complete (V5.1 - V5.5), browser-based interface for technicians.**
 **RAG v6: Complete (V6.1 - V6.3), extraction quality and document lifecycle control.**
-**RAG v7: In Progress (V7.1, V7.2.1 done), UI polish and measured retrieval-weight tuning.**
+**RAG v7: In Progress (V7.1, V7.2.1, V7.2.2 done), UI polish, measured retrieval-weight tuning, and multi-symbol table row support.**
 
 The system ingests one or more PDF documents, cleans and
 chunks their text, and retrieves the most relevant passages
@@ -237,7 +237,7 @@ datasheet): uploading it through the browser made it
 searchable immediately, with no restart needed.
 
 Retrieval quality is measured automatically and
-comparatively, not just assumed: **197 automated tests**
+comparatively, not just assumed: **210 automated tests**
 currently pass, including a golden-dataset evaluation across
 16 questions (12 matching the document's own technical
 vocabulary, 4 deliberately paraphrased in natural language)
@@ -279,6 +279,36 @@ formula for both the overall dataset and literal
 unweighted baseline - no regression - on paraphrased questions.
 This addresses the trade-off previously documented in Known
 Limitations below with real measurement instead of a guess.
+
+As of RAG v7.2.2, a table row where the source PDF packs more
+than one symbol into a single visual row (e.g. `tr`/`tf`
+sharing one row on the NE555N.pdf electrical-characteristics
+table) is reconstructed into one independent fact per symbol,
+closing the one known gap left open by RAG v6.2. The number of
+symbols packed into the row is derived from the Parameter
+column's own line count (corroborated by at least one value
+column splitting into that same count), not from the Symbol
+column's line count - the Symbol column can itself split each
+packed symbol across its own base+subscript lines (e.g.
+`tr`/`tf` extracting as `t\nr\nt\nf`, four lines for two
+symbols, confirmed against the real PDF), so anchoring on it
+directly would only work for whatever specific line count was
+tested. This makes the fix adapt to any number of
+lines-per-symbol rather than a hardcoded one. Live validation
+then surfaced a second, unrelated gap: the newly-correct fact
+was being retrieved, but a lexical safety net inside
+`hybrid_retrieval.py` (originally built for RAG v5.5) was
+evicting it from the final results to make room for an
+unrelated page that only tied its lexical score because of a
+boilerplate header repeated on nearly every page of the
+document. The safety net now protects any result already tied
+for the best lexical score, at sufficient confidence, from
+being evicted to admit another member of that same tied group
+- it now only ever sacrifices a genuinely weaker slot, or
+declines to rescue at all if none exists. Both fixes were
+validated live: "What is the output rise time of the NE555?"
+and "What is the output fall time of the NE555?" now each
+answer correctly and independently, citing page 5.
 
 ## Current Progress
 
@@ -334,6 +364,14 @@ Limitations below with real measurement instead of a guess.
       `lexical_weight`/`semantic_weight`; production tuned to
       2.0/1.0 based on real measurement against the full golden
       dataset, see Known Limitations below)
+- [x] Multi-symbol table row splitting + lexical safety-net
+      eviction protection (RAG v7.2.2 - a table row packing
+      more than one symbol into a single visual row is split
+      into one fact per symbol, with the symbol count derived
+      from the Parameter column rather than a hardcoded line
+      count; also fixes a safety-net bug, found via live
+      validation, that could evict a correct, tied-best-score
+      result to admit an unrelated, boilerplate-inflated one)
 
 ## Known Limitations
 
@@ -363,6 +401,42 @@ Limitations below with real measurement instead of a guess.
   `answer_question` now requests this tuned weighting in
   production, kept as an application-level decision separate
   from the fusion module's own neutral default.
+- **Resolved (RAG v7.2.2): a table row packing more than one
+  symbol into one visual row didn't split cleanly, and a
+  related lexical safety-net bug could evict the correct
+  answer once it did.** Confirmed against a real page of
+  NE555N.pdf via `diagnose_multi_symbol_tables.py`/
+  `diagnose_tr_tf_raw_cells.py`: the `tr`/`tf` row's Symbol
+  column extracts as `t\nr\nt\nf` (4 lines, because PyMuPDF
+  also splits each packed symbol across its own
+  base+subscript lines) rather than the assumed `tr\ntf` (2
+  lines) - a first attempt anchored on the Symbol column's own
+  line count broke against this real shape and would have
+  broken again for any future document with a different line
+  count. `_split_multi_symbol_row` (`document_loader.py`) now
+  derives the symbol count from the Parameter column instead
+  (corroborated by at least one value column splitting into
+  that same count, so a Parameter cell that merely text-wraps
+  across several lines under one symbol is never
+  misidentified), then groups the Symbol column's lines -
+  however many there are - into that many even chunks. Live
+  validation then surfaced a second, independent bug: the
+  correct fact was being retrieved, but
+  `_apply_lexical_safety_net` (RAG v5.5) was evicting it to
+  admit an unrelated page whose lexical score only tied
+  because of a header repeated on nearly every page of the
+  document ("NE555 - SA555 - SE555"), not because it was
+  actually relevant. The safety net's eviction step now
+  excludes any slot that is itself tied for the best lexical
+  score at sufficient confidence - the same bar a rescue
+  candidate must clear - so it never sacrifices one strong
+  match to admit another equally-strong one, and declines to
+  rescue at all when no genuinely weaker slot exists. Both
+  confirmed live: "What is the output rise time of the
+  NE555?" and "What is the output fall time of the NE555?"
+  now each answer correctly and independently, citing page 5
+  (previously: a no-answer fallback with a garbled source
+  citation). 210 tests passing, zero regressions.
 - **Confidence is a lexical/semantic signal, not a true
   probability:** it can't perfectly distinguish a real (if
   generic) match from a coincidental one. It catches
@@ -396,7 +470,8 @@ Limitations below with real measurement instead of a guess.
   validated against the original 16-question golden dataset in
   isolation: identical Precision/Recall/MRR to the previously
   documented baseline in every case, confirming zero
-  regression.
+  regression. See the RAG v7.2.2 entry above for a third
+  refinement to this same mechanism.
 - **Resolved (RAG v6.2): PDF table extraction losing column
   structure.** The gap surfaced by the v5.5 investigation above
   - a multi-column datasheet table extracted as a flat sequence
@@ -417,14 +492,13 @@ Limitations below with real measurement instead of a guess.
   importantly, live: the exact question that returned the
   no-answer fallback throughout v5.5 ("What is the turn off
   time of the NE555?") now answers correctly and grounded
-  ("0.5 µs, Source: NE555N, page 5"). Known, accepted
-  remaining gap: a table row where the source PDF itself packs
-  two symbols into one visual row (e.g. `tr`/`tf` sharing a
-  row) doesn't split cleanly - not recoverable from PyMuPDF's
-  `extract()` text alone without per-line bounding boxes, and
-  no worse than the pre-v6.2 behavior for that specific case.
-  As of RAG v6.3, both original v5.5 questions are also a
-  permanent, automated regression check
+  ("0.5 µs, Source: NE555N, page 5"). **Resolved (RAG v7.2.2):**
+  a table row where the source PDF itself packs two symbols
+  into one visual row (e.g. `tr`/`tf` sharing a row) now splits
+  cleanly into one fact per symbol - see the RAG v7.2.2 entry
+  above for the full fix and the safety-net bug it also
+  surfaced. As of RAG v6.3, both original v5.5 questions are
+  also a permanent, automated regression check
   (`tests/test_evaluation_ne555n.py`), not just a live
   smoke-test memory.
 - **Safety-net threshold recalibration (RAG v6.4) deliberately
@@ -435,7 +509,12 @@ Limitations below with real measurement instead of a guess.
   net is ever consulted, so it produced no new rescue case to
   learn from. Revisiting the threshold with only the same two
   data points would be guessing, not calibrating - left as-is
-  until a real new case actually appears.
+  until a real new case actually appears. RAG v7.2.2 did surface
+  a new real safety-net bug, but it concerned WHICH tied result
+  gets evicted, not the 0.35 confidence bar itself - fixed
+  there instead, not here. The threshold value remains
+  untouched, still awaiting a case that actually calls it into
+  question.
 
 ## Design Philosophy
 
@@ -462,11 +541,12 @@ questions, upload, replace, or delete documents, and start the
 whole system with a single double-click, with no command line
 involved beyond a one-time Python/Ollama setup shared by any
 local-LLM tool. Every retrieval and extraction gap surfaced by
-real, previously-unseen documents so far (RAG v5.5, RAG v6.2)
-has been root-caused with evidence and fixed, not just patched
-around, and RAG v6.3 turned both of v5.5's original failing
-questions into permanent automated regression coverage instead
-of a manual smoke test someone has to remember to repeat.
+real, previously-unseen documents so far (RAG v5.5, RAG v6.2,
+RAG v7.2.2) has been root-caused with evidence and fixed, not
+just patched around, and RAG v6.3 turned both of v5.5's
+original failing questions into permanent automated regression
+coverage instead of a manual smoke test someone has to
+remember to repeat.
 
 The long-term goal remains transforming the project into a
 technical troubleshooting assistant capable of helping
@@ -480,14 +560,13 @@ technicians:
 6. Improve equipment recovery time
 
 RAG v7 is in progress: V7.1 (filename display + single delete
-button) and V7.2.1 (measured hybrid retrieval weight tuning,
-see Known Limitations above) are both done. Still open: V7.2.2
-(reconstructing table rows where the source PDF packs more than
-one symbol into a single visual row - see Known Limitations
-above), and two new technician-facing features - a persistent
-question/answer history (V7.3.1) and, as an optional stretch,
-resolving conversational follow-up questions before retrieval
-(V7.3.2).
+button), V7.2.1 (measured hybrid retrieval weight tuning), and
+V7.2.2 (multi-symbol table row splitting plus a lexical
+safety-net eviction fix - see Known Limitations above) are all
+done. Still open: two new technician-facing features - a
+persistent question/answer history (V7.3.1) and, as an
+optional stretch, resolving conversational follow-up questions
+before retrieval (V7.3.2).
 
 Open, non-blocking follow-ups: safety-net threshold
 recalibration if a new real rescue case ever appears (RAG v6.4,
