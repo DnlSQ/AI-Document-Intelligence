@@ -19,13 +19,28 @@ paraphrase), same as test_retrieval_comparison_manual.py, since
 that's the terrain where lexical and semantic are known to trade
 off (see rag-v3-progress.md).
 
+Uses an isolated in-memory ChromaDB collection (chromadb.EphemeralClient,
+unique name per run), matching the isolation convention established
+in V4 for every other test that touches the vector store. Bug found
+during the RAG v7.4 investigation (2026-09-01): this script used to
+call vector_store.get_collection() with no override, which defaults
+to the REAL on-disk production collection - running this script
+silently reset and overwrote Daniel's real persisted vector store
+with a fresh rebuild as a side effect, desyncing it from
+data/chunk_store.db. Never write to the real store from a measurement
+script again.
+
 Run by hand:
 
     python -m tests.test_hybrid_weighting_manual
 """
+import uuid
+
+import chromadb
+
 from src.main import build_chunk_repository
 from src.embeddings import generate_embeddings_for_chunks
-from src.vector_store import add_chunks_to_store, reset_store, get_collection
+from src.vector_store import add_chunks_to_store, get_collection
 from src.hybrid_retrieval import hybrid_retrieve
 from src.evaluation import (
     EVALUATION_DATASET,
@@ -81,14 +96,14 @@ def print_weight_comparison(dataset, chunks, collection, label):
 
 
 print("=" * 80)
-print("BUILDING CHUNK REPOSITORY + VECTOR STORE")
+print("BUILDING CHUNK REPOSITORY + ISOLATED VECTOR STORE")
 print("=" * 80)
 
 chunks = build_chunk_repository()
 embedded_chunks = generate_embeddings_for_chunks(chunks)
 
-collection = get_collection()
-reset_store(collection=collection)
+client = chromadb.EphemeralClient()
+collection = get_collection(client=client, name=f"test_hybrid_weighting_{uuid.uuid4().hex}")
 add_chunks_to_store(embedded_chunks, collection=collection)
 
 print(f"Loaded {len(chunks)} chunks.")
