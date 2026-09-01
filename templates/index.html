@@ -3,130 +3,173 @@
 <head>
     <meta charset="UTF-8">
     <title>AI Document Intelligence</title>
-    <style>
-        body { font-family: sans-serif; max-width: 1100px; margin: 2rem auto; padding: 0 1rem; }
-        h1 { font-size: 1.4rem; }
-        .layout { display: flex; gap: 2rem; align-items: flex-start; }
-        .main-column { flex: 2; min-width: 0; }
-        .history-column { flex: 1; min-width: 260px; }
-        table { border-collapse: collapse; width: 100%; margin-top: 1rem; }
-        th, td { text-align: left; padding: 0.4rem 0.6rem; border-bottom: 1px solid #ddd; }
-        th:first-child, td:first-child { width: 2rem; }
-        .empty { color: #666; font-style: italic; }
-        form.ask-form { margin-top: 1.5rem; display: flex; gap: 0.5rem; }
-        form.ask-form input[type="text"] { flex: 1; padding: 0.4rem; }
-        form.upload-form { margin-top: 1rem; display: flex; gap: 0.5rem; align-items: center; }
-        #delete-btn { margin-top: 0.8rem; }
-        .answer-box { margin-top: 1rem; padding: 0.8rem; background: #f4f4f4; border-radius: 4px; }
-        .answer-box .question { font-weight: bold; margin-bottom: 0.4rem; }
-        .error-box { margin-top: 1rem; padding: 0.8rem; background: #fdecea; color: #7a1f1f; border-radius: 4px; }
-        .warning-box { margin-top: 1rem; padding: 0.8rem; background: #fff4e0; color: #7a5b1f; border-radius: 4px; }
-        .success-box { margin-top: 1rem; padding: 0.8rem; background: #e8f5e9; color: #1f7a34; border-radius: 4px; }
-        .history-entry { margin-bottom: 1rem; padding: 0.6rem; background: #fafafa; border: 1px solid #eee; border-radius: 4px; }
-        .history-entry .question { font-weight: bold; margin-bottom: 0.3rem; }
-        .history-entry .answer { font-size: 0.9rem; color: #333; }
-        .history-entry .asked-at { font-size: 0.75rem; color: #999; margin-top: 0.3rem; }
-    </style>
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
 </head>
 <body>
-    <h1>AI Document Intelligence</h1>
+    <header class="app-header">
+        <span class="header-spacer" aria-hidden="true"></span>
+        <h1>AI Document Intelligence</h1>
+        <span class="badge">Local &middot; Offline &middot; No cloud APIs</span>
+    </header>
 
     <div class="layout">
-        <div class="main-column">
-            <h2>Ask a question</h2>
-            <form class="ask-form" method="post" action="/ask">
-                <input type="text" name="question" placeholder="e.g. What is the maximum collector-emitter voltage?" value="{{ question or '' }}">
-                <button type="submit">Ask</button>
-            </form>
+        <div class="documents-column">
+            <section class="card">
+                <h2>Loaded documents</h2>
+                {% if documents %}
+                <form method="post" action="/delete" id="delete-form">
+                    <table>
+                        <tr><th></th><th>Document</th><th>Chunks</th></tr>
+                        {% for doc in documents %}
+                        <tr>
+                            <td><input type="radio" name="source" value="{{ doc.source }}" class="delete-radio"></td>
+                            <td>{{ doc.display_name }}</td>
+                            <td class="chunk-count">{{ doc.chunk_count }}</td>
+                        </tr>
+                        {% endfor %}
+                    </table>
+                    <button type="submit" id="delete-btn" class="danger" disabled>
+                        <span class="btn-label">Delete selected document</span>
+                        <span class="spinner" hidden></span>
+                    </button>
+                </form>
+                <script>
+                    (function () {
+                        var radios = document.querySelectorAll(".delete-radio");
+                        var deleteBtn = document.getElementById("delete-btn");
+                        var deleteForm = document.getElementById("delete-form");
 
-            {% if error %}
-            <div class="error-box">{{ error }}</div>
-            {% elif answer %}
-            <div class="answer-box">
-                <div class="question">{{ question }}</div>
-                <div>{{ answer }}</div>
-            </div>
-            {% endif %}
-
-            <h2>Loaded documents</h2>
-            {% if documents %}
-            <form method="post" action="/delete" id="delete-form">
-                <table>
-                    <tr><th></th><th>Document</th><th>Chunks</th></tr>
-                    {% for doc in documents %}
-                    <tr>
-                        <td><input type="radio" name="source" value="{{ doc.source }}" class="delete-radio"></td>
-                        <td>{{ doc.display_name }}</td>
-                        <td>{{ doc.chunk_count }}</td>
-                    </tr>
-                    {% endfor %}
-                </table>
-                <button type="submit" id="delete-btn" disabled>Delete selected document</button>
-            </form>
-            <script>
-                (function () {
-                    var radios = document.querySelectorAll(".delete-radio");
-                    var deleteBtn = document.getElementById("delete-btn");
-                    var deleteForm = document.getElementById("delete-form");
-
-                    radios.forEach(function (radio) {
-                        radio.addEventListener("change", function () {
-                            deleteBtn.disabled = false;
+                        radios.forEach(function (radio) {
+                            radio.addEventListener("change", function () {
+                                deleteBtn.disabled = false;
+                            });
                         });
-                    });
 
-                    deleteForm.addEventListener("submit", function (event) {
-                        var selected = deleteForm.querySelector(".delete-radio:checked");
-                        if (!selected) {
-                            event.preventDefault();
-                            return;
-                        }
-                        var row = selected.closest("tr");
-                        var name = row ? row.children[1].textContent : "the selected document";
-                        if (!confirm("Delete " + name + "? This cannot be undone.")) {
-                            event.preventDefault();
-                        }
-                    });
-                })();
-            </script>
-            {% else %}
-            <p class="empty">No documents loaded yet.</p>
-            {% endif %}
-            {% if delete_error %}
-            <div class="error-box">{{ delete_error }}</div>
-            {% elif delete_message %}
-            <div class="success-box">{{ delete_message }}</div>
-            {% endif %}
+                        deleteForm.addEventListener("submit", function (event) {
+                            var selected = deleteForm.querySelector(".delete-radio:checked");
+                            if (!selected) {
+                                event.preventDefault();
+                                return;
+                            }
+                            var row = selected.closest("tr");
+                            var name = row ? row.children[1].textContent : "the selected document";
+                            if (!confirm("Delete " + name + "? This cannot be undone.")) {
+                                event.preventDefault();
+                                return;
+                            }
+                            setButtonBusy(deleteBtn, "Deleting...");
+                        });
+                    })();
+                </script>
+                {% else %}
+                <p class="empty">No documents loaded yet.</p>
+                {% endif %}
+                {% if delete_error %}
+                <div class="error-box">{{ delete_error }}</div>
+                {% elif delete_message %}
+                <div class="success-box">{{ delete_message }}</div>
+                {% endif %}
+            </section>
 
-            <h2>Upload / replace a document</h2>
-            <form class="upload-form" method="post" action="/upload" enctype="multipart/form-data">
-                <input type="file" name="document" accept=".pdf">
-                <button type="submit">Upload</button>
-            </form>
+            <section class="card">
+                <h2>Upload / replace a document</h2>
+                <form class="upload-form" method="post" action="/upload" enctype="multipart/form-data" id="upload-form">
+                    <input type="file" name="document" accept=".pdf">
+                    <button type="submit" id="upload-btn">Upload</button>
+                </form>
 
-            {% if upload_error %}
-            <div class="error-box">{{ upload_error }}</div>
-            {% elif upload_warning %}
-            <div class="warning-box">{{ upload_warning }}</div>
-            {% elif upload_message %}
-            <div class="success-box">{{ upload_message }}</div>
-            {% endif %}
+                {% if upload_error %}
+                <div class="error-box">{{ upload_error }}</div>
+                {% elif upload_warning %}
+                <div class="warning-box">{{ upload_warning }}</div>
+                {% elif upload_message %}
+                <div class="success-box">{{ upload_message }}</div>
+                {% endif %}
+            </section>
+        </div>
+
+        <div class="main-column">
+            <section class="card ask-card">
+                <h2>Ask a question</h2>
+                <form class="ask-form" method="post" action="/ask">
+                    <input type="text" name="question" placeholder="e.g. What is the maximum collector-emitter voltage?" value="{{ question or '' }}">
+                    <button type="submit" id="ask-btn">Ask</button>
+                </form>
+
+                {% if error %}
+                <div class="error-box">{{ error }}</div>
+                {% elif answer %}
+                <div class="bubble-thread">
+                    <div class="bubble question">
+                        <div class="bubble-label">Question</div>
+                        {{ question }}
+                    </div>
+                    <div class="bubble answer">
+                        <div class="bubble-label">Answer</div>
+                        {{ answer }}
+                    </div>
+                </div>
+                {% else %}
+                <p class="ask-placeholder">Ask a question about your loaded documents above to see a grounded, source-cited answer here.</p>
+                {% endif %}
+            </section>
         </div>
 
         <div class="history-column">
-            <h2>Recent questions</h2>
-            {% if history %}
-            {% for entry in history %}
-            <div class="history-entry">
-                <div class="question">{{ entry.question }}</div>
-                <div class="answer">{{ entry.answer }}</div>
-                <div class="asked-at">{{ entry.asked_at }}</div>
-            </div>
-            {% endfor %}
-            {% else %}
-            <p class="empty">No questions asked yet.</p>
-            {% endif %}
+            <section class="card history-card">
+                <h2>Recent questions</h2>
+                <div class="history-list">
+                    {% if history %}
+                    {% for entry in history %}
+                    <div class="bubble-thread history-entry">
+                        <div class="bubble question">
+                            <div class="bubble-label">Question</div>
+                            {{ entry.question }}
+                        </div>
+                        <div class="bubble answer">
+                            <div class="bubble-label">Answer</div>
+                            {{ entry.answer }}
+                        </div>
+                        <div class="asked-at">{{ entry.asked_at }}</div>
+                    </div>
+                    {% endfor %}
+                    {% else %}
+                    <p class="empty">No questions asked yet.</p>
+                    {% endif %}
+                </div>
+            </section>
         </div>
     </div>
+
+    <footer class="app-footer">
+        <div>&copy; <span id="copyright-year"></span> Daniel Felipe Solano Quirós. All rights reserved.</div>
+        <div class="footer-meta">
+            AI Document Intelligence &middot; Created by
+            <a href="https://www.linkedin.com/in/daniel-felipe-solano-quiros" target="_blank" rel="noopener noreferrer">Daniel Felipe Solano Quirós</a>
+            &middot; 100% local, 100% free
+        </div>
+    </footer>
+
+    <script>
+        // Busy feedback: only the delete button uses this now (Ask
+        // and Upload lost the spinner/text-swap after live review -
+        // this function is kept only for the delete confirm() flow
+        // above).
+        function setButtonBusy(button, busyLabel) {
+            var label = button.querySelector(".btn-label");
+            var spinner = button.querySelector(".spinner");
+            button.disabled = true;
+            if (label) {
+                label.textContent = busyLabel;
+            }
+            if (spinner) {
+                spinner.hidden = false;
+            }
+        }
+
+        // Footer copyright year: computed client-side so it never
+        // needs a code change or a backend value - just today's date.
+        document.getElementById("copyright-year").textContent = new Date().getFullYear();
+    </script>
 </body>
 </html>

@@ -26,7 +26,7 @@ from src.chunk_store import load_all_chunks
 from src.qa_history import save_qa_pair, load_history
 from src.config import DOCUMENTS_FOLDER, CHUNK_DB_PATH
 
-app = Flask(__name__, template_folder="../templates")
+app = Flask(__name__, template_folder="../templates", static_folder="../static")
 
 # Local, single-user tool with no authentication. The session is
 # only ever used to pass the result of the last /ask POST to the

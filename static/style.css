@@ -1,0 +1,503 @@
+/*
+ * AI Document Intelligence - V8.1 UI/UX Overhaul.
+ *
+ * Dark, industrial/technical theme - confirmed with Daniel before
+ * implementation. All fonts are system stacks (no external font
+ * or CDN loading of any kind): the project must remain usable
+ * without an internet connection, so this file never references
+ * anything outside itself.
+ *
+ * Layout revised after live review: three columns instead of two
+ * - documents/upload management on the left, the ask-a-question
+ * chat area as the wide center focus, history on the right - and
+ * the loading spinner was removed from the Ask/Upload buttons
+ * (it had a display bug making it always visible, not just while
+ * busy - see the .spinner rule below for the fix, kept for the
+ * delete button which still uses it).
+ */
+
+:root {
+    /* Bumped panel/border contrast against --bg after live review -
+       #1c2028 vs #14171c read as almost the same shade, so card
+       boundaries were hard to see (most visible on the ask-card,
+       which has little content in its empty state). */
+    --bg: #14171c;
+    --panel: #1e2430;
+    --panel-alt: #262d3a;
+    --border: #333c4c;
+    --text: #e7eaf0;
+    --text-muted: #8b93a3;
+
+    --accent: #4da6ff;
+    --accent-dim: #2f6fa8;
+    --accent-soft: rgba(77, 166, 255, 0.12);
+
+    --success: #4caf82;
+    --success-bg: rgba(76, 175, 130, 0.12);
+    --warning: #ffab40;
+    --warning-bg: rgba(255, 171, 64, 0.12);
+    --error: #ff6b6b;
+    --error-bg: rgba(255, 107, 107, 0.12);
+
+    --sans-font: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Arial, sans-serif;
+    --mono-font: ui-monospace, SFMono-Regular, Consolas, "Liberation Mono", monospace;
+}
+
+* {
+    box-sizing: border-box;
+}
+
+body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: var(--sans-font);
+    /* Widened after live review - 1300px left large empty gutters
+       on a wide monitor, pushing the side columns in from the
+       edges instead of using the available screen. */
+    max-width: 1700px;
+    margin: 2rem auto;
+    padding: 0 1.5rem 3rem;
+    line-height: 1.5;
+}
+
+/* Grid instead of flex/space-between so the title is centered on
+   the header's actual width, not just "pushed away from the badge"
+   - the empty first column balances the badge's width in the third
+   column, keeping the title dead-center regardless of badge width. */
+header.app-header {
+    display: grid;
+    grid-template-columns: 1fr auto 1fr;
+    align-items: center;
+    gap: 0.5rem;
+    margin-bottom: 1.5rem;
+    border-bottom: 1px solid var(--border);
+    padding-bottom: 1rem;
+}
+
+header.app-header .header-spacer {
+    grid-column: 1;
+}
+
+h1 {
+    grid-column: 2;
+    font-size: 1.4rem;
+    margin: 0;
+    letter-spacing: 0.01em;
+    text-align: center;
+}
+
+header.app-header .badge {
+    grid-column: 3;
+    justify-self: end;
+}
+
+.badge {
+    font-family: var(--mono-font);
+    font-size: 0.72rem;
+    color: var(--text-muted);
+    border: 1px solid var(--border);
+    border-radius: 999px;
+    padding: 0.25rem 0.7rem;
+    background: var(--panel);
+    white-space: nowrap;
+}
+
+h2 {
+    font-size: 1rem;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    color: var(--text-muted);
+    margin: 0 0 0.8rem;
+}
+
+.layout {
+    display: flex;
+    gap: 1.5rem;
+    align-items: flex-start;
+}
+
+.documents-column {
+    flex: 1;
+    min-width: 280px;
+    display: flex;
+    flex-direction: column;
+    gap: 1.25rem;
+}
+
+.main-column {
+    /* Bumped from 2 to 3 (documents/history stay at 1 each) so the
+       ask-a-question column visibly dominates the page instead of
+       just matching the two side columns combined. */
+    flex: 3;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 1.25rem;
+}
+
+.history-column {
+    flex: 1;
+    min-width: 260px;
+}
+
+.card {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 1.1rem 1.2rem;
+    /* Subtle shadow so a card's edge reads clearly even where its
+       background is close in tone to the page behind it. */
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.3);
+}
+
+/* The ask-a-question card is the visual centerpiece of the page -
+   larger type, more padding. The empty-state placeholder below
+   (.ask-placeholder) gives it real content to hold before any
+   question has been asked, instead of a blank void. */
+.ask-card {
+    padding: 2rem 2.2rem 2.4rem;
+}
+
+.ask-card h2 {
+    font-size: 1.15rem;
+    text-align: center;
+}
+
+/* The card itself is wide (flex: 3, see .main-column above), but
+   its actual content - the input row, the answer, the placeholder
+   - is capped and centered within it, so it reads as a focused,
+   centered chat panel rather than one long stretched-out input. */
+.ask-card .ask-form,
+.ask-card .bubble-thread,
+.ask-placeholder {
+    max-width: 720px;
+    margin-left: auto;
+    margin-right: auto;
+}
+
+.ask-placeholder {
+    margin-top: 1.4rem;
+    padding: 1.6rem 1.1rem;
+    border: 1px dashed var(--border);
+    border-radius: 8px;
+    color: var(--text-muted);
+    font-size: 0.92rem;
+    text-align: center;
+}
+
+/* Forms */
+
+form.ask-form {
+    display: flex;
+    gap: 0.6rem;
+}
+
+.ask-card input[type="text"] {
+    flex: 1;
+    padding: 0.85rem 1rem;
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    color: var(--text);
+    font-family: var(--sans-font);
+    font-size: 1.05rem;
+}
+
+.ask-card input[type="text"]:focus {
+    outline: none;
+    border-color: var(--accent);
+}
+
+.ask-card .ask-form button {
+    font-size: 1rem;
+    padding: 0.7rem 1.4rem;
+}
+
+form.upload-form {
+    display: flex;
+    gap: 0.5rem;
+    align-items: center;
+    flex-wrap: wrap;
+}
+
+input[type="file"] {
+    color: var(--text-muted);
+    font-size: 0.85rem;
+    /* Flex items default to min-width: auto, which stops a native
+       file input from ever shrinking below its own content width -
+       that's what pushed it past the card's edge. min-width: 0
+       lets it actually respect the card's available width. */
+    min-width: 0;
+    max-width: 100%;
+    flex: 1 1 auto;
+}
+
+/* The browser's own "choose file" button ignores page CSS by
+   default and renders as a plain light-gray system button, which
+   broke the dark theme (a bright white patch in the upload card).
+   ::file-selector-button is the standard hook to restyle it -
+   supported in every current browser (Chrome/Edge, Firefox 106+,
+   Safari 16+); an older browser just falls back to its native
+   look, so this degrades safely rather than breaking anything. */
+input[type="file"]::file-selector-button {
+    font-family: var(--sans-font);
+    font-size: 0.82rem;
+    font-weight: 600;
+    padding: 0.4rem 0.8rem;
+    border-radius: 6px;
+    border: 1px solid var(--border);
+    background: var(--panel-alt);
+    color: var(--text);
+    cursor: pointer;
+    margin-right: 0.6rem;
+}
+
+input[type="file"]::file-selector-button:hover {
+    background: var(--border);
+}
+
+button {
+    font-family: var(--sans-font);
+    font-size: 0.9rem;
+    font-weight: 600;
+    padding: 0.55rem 1rem;
+    border-radius: 6px;
+    border: 1px solid var(--accent-dim);
+    background: var(--accent);
+    color: #0b1420;
+    cursor: pointer;
+    display: inline-flex;
+    align-items: center;
+    gap: 0.5rem;
+    transition: opacity 0.15s ease;
+}
+
+button:hover:not(:disabled) {
+    opacity: 0.88;
+}
+
+button:disabled {
+    cursor: default;
+    opacity: 0.6;
+}
+
+button.danger {
+    background: transparent;
+    color: var(--error);
+    border-color: var(--error);
+}
+
+#delete-btn {
+    margin-top: 0.8rem;
+}
+
+/* Busy spinner - only used by the delete button now (the Ask/Upload
+   buttons no longer show a loading animation, per live review).
+   Bug fixed here: `display` is set on the :not([hidden]) variant,
+   not on the base .spinner rule, so when the `hidden` attribute is
+   present nothing overrides the browser's own [hidden]{display:none}
+   default - previously an author rule of equal specificity beat it,
+   so the circle was visible even at rest. */
+.spinner {
+    width: 13px;
+    height: 13px;
+    border: 2px solid rgba(11, 20, 32, 0.35);
+    border-top-color: #0b1420;
+    border-radius: 50%;
+    animation: spin 0.6s linear infinite;
+}
+
+.spinner:not([hidden]) {
+    display: inline-block;
+}
+
+@keyframes spin {
+    to {
+        transform: rotate(360deg);
+    }
+}
+
+/* Tables */
+
+table {
+    border-collapse: collapse;
+    width: 100%;
+    margin-top: 0.5rem;
+}
+
+th, td {
+    text-align: left;
+    padding: 0.5rem 0.6rem;
+    border-bottom: 1px solid var(--border);
+}
+
+th {
+    color: var(--text-muted);
+    font-weight: 600;
+    font-size: 0.8rem;
+    text-transform: uppercase;
+    letter-spacing: 0.03em;
+}
+
+th:first-child, td:first-child {
+    width: 2rem;
+}
+
+tbody tr:hover {
+    background: var(--panel-alt);
+}
+
+td.chunk-count {
+    font-family: var(--mono-font);
+    color: var(--text-muted);
+}
+
+.empty {
+    color: var(--text-muted);
+    font-style: italic;
+}
+
+/* Status boxes */
+
+.error-box, .warning-box, .success-box {
+    margin-top: 1rem;
+    padding: 0.7rem 0.9rem;
+    border-radius: 6px;
+    font-size: 0.9rem;
+}
+
+.error-box {
+    background: var(--error-bg);
+    color: var(--error);
+    border: 1px solid rgba(255, 107, 107, 0.35);
+}
+
+.warning-box {
+    background: var(--warning-bg);
+    color: var(--warning);
+    border: 1px solid rgba(255, 171, 64, 0.35);
+}
+
+.success-box {
+    background: var(--success-bg);
+    color: var(--success);
+    border: 1px solid rgba(76, 175, 130, 0.35);
+}
+
+/* Chat-style bubbles - shared by the "latest answer" area and the
+   history panel, so a fresh answer and a past one look the same
+   kind of thing. */
+
+.bubble-thread {
+    display: flex;
+    flex-direction: column;
+    gap: 0.6rem;
+}
+
+.ask-card .bubble-thread {
+    margin-top: 1.4rem;
+    min-height: 140px;
+}
+
+.bubble {
+    border-radius: 10px;
+    padding: 0.65rem 0.85rem;
+    font-size: 0.92rem;
+}
+
+.ask-card .bubble {
+    padding: 0.9rem 1.1rem;
+    font-size: 1rem;
+}
+
+.bubble .bubble-label {
+    font-family: var(--mono-font);
+    font-size: 0.68rem;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: var(--text-muted);
+    margin-bottom: 0.25rem;
+}
+
+.bubble.question {
+    background: var(--accent-soft);
+    border: 1px solid var(--accent-dim);
+}
+
+.bubble.answer {
+    background: var(--panel-alt);
+    border: 1px solid var(--border);
+}
+
+/* Caps the history panel's height instead of letting it grow the
+   whole page taller as more Q&A pairs accumulate (up to
+   HISTORY_DISPLAY_LIMIT = 10 entries) - the heading stays put and
+   only .history-list scrolls internally. */
+.history-card {
+    display: flex;
+    flex-direction: column;
+    max-height: 80vh;
+}
+
+.history-list {
+    overflow-y: auto;
+    padding-right: 0.4rem;
+    /* Firefox */
+    scrollbar-width: thin;
+    scrollbar-color: var(--border) transparent;
+}
+
+.history-list::-webkit-scrollbar {
+    width: 8px;
+}
+
+.history-list::-webkit-scrollbar-track {
+    background: transparent;
+}
+
+.history-list::-webkit-scrollbar-thumb {
+    background: var(--border);
+    border-radius: 4px;
+}
+
+.history-list::-webkit-scrollbar-thumb:hover {
+    background: var(--accent-dim);
+}
+
+.history-entry {
+    margin-bottom: 1rem;
+}
+
+.history-entry .asked-at {
+    font-family: var(--mono-font);
+    font-size: 0.7rem;
+    color: var(--text-muted);
+    margin-top: 0.35rem;
+}
+
+/* Legal / attribution footer - year is filled in by the small
+   script at the bottom of index.html (new Date().getFullYear()),
+   so this never needs an annual code change. */
+.app-footer {
+    margin-top: 2.5rem;
+    padding-top: 1.2rem;
+    border-top: 1px solid var(--border);
+    text-align: center;
+    color: var(--text-muted);
+    font-size: 0.8rem;
+    line-height: 1.6;
+}
+
+.app-footer a {
+    color: var(--accent);
+    text-decoration: none;
+}
+
+.app-footer a:hover {
+    text-decoration: underline;
+}
+
+.footer-meta {
+    font-size: 0.75rem;
+    margin-top: 0.2rem;
+}
