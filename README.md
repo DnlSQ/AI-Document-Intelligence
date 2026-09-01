@@ -321,11 +321,10 @@ fix for a real bug found during live validation - refreshing the
 browser after asking a question used to resubmit the form,
 silently duplicating the entry in history and triggering an extra,
 wasted LLM call - not a design chosen up front. The same live
-validation pass also surfaced an unrelated, separate retrieval gap
-(a cross-document ranking ambiguity between two similarly-worded
-"voltage" questions in different documents) - see Known
-Limitations below; it does not block this feature and is tracked
-as a candidate for a future retrieval-quality phase.
+validation pass also surfaced an unrelated, separate issue (a
+cross-document retrieval ambiguity, initially suspected as a
+ranking bug) - see Known Limitations below for the investigation
+and its real root cause.
 
 ## Current Progress
 
@@ -466,30 +465,52 @@ as a candidate for a future retrieval-quality phase.
   checking for `tr`/`tf` as standalone tokens) that guard
   specifically against `_split_multi_symbol_row` ever regressing
   to the original garbled `Symbol: trtf` behavior.
-- **Open (found during RAG v7.3.1 live validation): a
-  cross-document retrieval ranking ambiguity can hide a correct
-  answer that exists in a different document than the one the
-  top results come from.** "What is the maximum
-  collector-emitter voltage?" returns the no-answer fallback
-  (citing NE555N.pdf) even though `sample.pdf` (a transistor
-  datasheet) contains the answer verbatim (`VCEO |
-  collector-emitter voltage | open base | - | -50 | V`).
-  Diagnosed with `diagnose_collector_emitter_voltage.py`: the
-  correct chunk scores lexical_confidence=0.270 and is never
-  found by semantic search (semantic_confidence=0.000), ranking
-  #4 in the fused results behind three NE555N.pdf "Absolute
-  maximum ratings" chunks that share generic vocabulary
+- **Resolved (2026-09-01): a cross-document retrieval ambiguity
+  turned out to be a desynced local store, not a ranking bug.**
+  "What is the maximum collector-emitter voltage?" intermittently
+  returned the no-answer fallback (citing NE555N.pdf) even though
+  `sample.pdf` (a transistor datasheet) contains the answer
+  verbatim. The initial diagnosis (`diagnose_collector_emitter_voltage.py`)
+  suspected a ranking problem: the correct chunk scored
+  lexical_confidence=0.270 but zero semantic_confidence, ranking
+  #4 behind three NE555N.pdf chunks sharing generic vocabulary
   ("voltage", "maximum") with the query - with production
-  `TOP_K_RESULTS=3`, the correct chunk never reaches the LLM.
-  Confirmed not a regression from the RAG v7.2.2 safety-net fix
-  (0.270 is below `LEXICAL_SAFETY_NET_THRESHOLD = 0.35`, so the
-  safety net never considers it - this gap is structural and
-  pre-existing). Root cause: the query uses plain English
-  ("collector-emitter voltage") rather than the technical symbol
-  ("VCEO") that the existing technical-term-weighting logic
-  (V2.1.2) would reward more. Confirmed with Daniel as not
-  blocking V7.3.1; not yet assigned a phase number - a candidate
-  for a future retrieval-quality phase.
+  `TOP_K_RESULTS=3`, it never reached the LLM. Measuring two
+  candidate fixes (raising `TOP_K_RESULTS`, lowering
+  `LEXICAL_SAFETY_NET_THRESHOLD`) against a freshly rebuilt copy
+  of the full document corpus found the case already ranking #1
+  with no change needed at all - directly contradicting the
+  original diagnosis. The real cause: `data/chunk_store.db` (73
+  persisted chunks) had drifted out of sync with the current PDF
+  files (a fresh rebuild produces 83) - most likely because a
+  document was added directly to `data/documents/` rather than
+  through the browser's upload route, and `main.initialize_system`
+  only performs a full ingest when the persisted store is
+  completely empty, so it silently never picked up the new file.
+  This is the same class of risk already documented below (SQLite
+  and the vector store as two separate stores that can drift
+  apart) - this was the first time it was actually observed, not
+  a new risk. A second, unrelated bug compounded the investigation
+  itself: `tests/test_hybrid_weighting_manual.py` (since RAG
+  v7.2.1) and a new investigation script both called
+  `vector_store.get_collection()` with no override, which
+  defaults to the REAL on-disk production collection instead of
+  an isolated one - running either script silently reset and
+  overwrote the real vector store with a fresh rebuild as a side
+  effect, which is what made the live bug intermittently seem to
+  "fix itself" mid-investigation. Both scripts now use an isolated
+  `chromadb.EphemeralClient` collection, matching the isolation
+  convention already established for every other test that
+  touches the vector store since RAG v4. Resolved with a clean,
+  deliberate re-ingestion (clearing `data/chunk_store.db` and the
+  vector store, then letting the app rebuild both from the current
+  PDFs) - confirmed live, and confirmed via measurement that
+  neither `TOP_K_RESULTS` nor `LEXICAL_SAFETY_NET_THRESHOLD` needed
+  to change; the original ranking hypothesis was a false lead.
+  Open follow-up, not yet pursued: `initialize_system` has no way
+  to detect a document added directly to the documents folder once
+  the store already holds any data - a candidate for a future
+  robustness improvement.
 - **Confidence is a lexical/semantic signal, not a true
   probability:** it can't perfectly distinguish a real (if
   generic) match from a coincidental one. It catches
@@ -624,11 +645,13 @@ retrieval (V7.3.2).
 
 Open, non-blocking follow-ups: safety-net threshold
 recalibration if a new real rescue case ever appears (RAG v6.4,
-deliberately not pursued yet - see Known Limitations), a
-cross-document retrieval ranking ambiguity found during V7.3.1's
-live validation (see Known Limitations above, not yet assigned a
-phase), and a fully standalone executable (no separate Python
-installation required, most likely via PyInstaller).
+deliberately not pursued yet - see Known Limitations), making
+`initialize_system` detect a document added directly to the
+documents folder instead of only ingesting once when the store is
+completely empty (found while investigating and resolving the
+collector-emitter-voltage gap - see Known Limitations above), and
+a fully standalone executable (no separate Python installation
+required, most likely via PyInstaller).
 
 ## Author
 
