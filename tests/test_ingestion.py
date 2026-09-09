@@ -26,11 +26,14 @@ def fake_chunks(source, count):
 def patch_pipeline(monkeypatch, chunks):
     """
     Stub out extraction/cleaning/chunking so add_or_replace_document
-    only exercises persistence + chunk_id assignment.
+    only exercises persistence + chunk_id assignment. RAG v8.3.1:
+    ingestion.py now calls the format dispatcher (extract_text)
+    instead of extract_text_from_pdf directly, so that's what gets
+    patched here.
     """
     monkeypatch.setattr(
-        "src.ingestion.extract_text_from_pdf",
-        lambda pdf_path: [{"page": 1, "text": "raw text"}]
+        "src.ingestion.extract_text",
+        lambda file_path: [{"page": 1, "text": "raw text"}]
     )
     monkeypatch.setattr(
         "src.ingestion.clean_text",
@@ -40,7 +43,6 @@ def patch_pipeline(monkeypatch, chunks):
         "src.ingestion.create_document_chunks",
         lambda pages, source: chunks
     )
-
 
 # ---------------------------------------------------------------
 # ADDING A NEW DOCUMENT

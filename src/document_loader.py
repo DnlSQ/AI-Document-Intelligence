@@ -12,7 +12,10 @@ NE555N.pdf), so this module now uses it to add clean, unambiguous
 the original plain text - never instead of it, so no page can lose
 information it already had.
 """
+import os
+
 import pymupdf
+from docx import Document as DocxDocument
 
 
 def extract_text_from_pdf(file_path):
@@ -248,3 +251,78 @@ def _clean_cell(cell_text, join_with_space):
         return ""
     separator = " " if join_with_space else ""
     return separator.join(line.strip() for line in cell_text.split("\n") if line.strip())
+
+def extract_text_from_docx(file_path):
+    """
+    Extracts text from a Word document (.docx) - RAG v8.3.1.
+
+    Unlike a PDF, a .docx file has no fixed page count stored in
+    the file itself: pagination is computed by Word at render time
+    from fonts/margins/window size, not persisted data - so there
+    is no reliable page boundary to recover, the way
+    extract_text_from_pdf recovers real PDF page numbers. Rather
+    than guess one, the whole document is returned as a single
+    page (page=1) - honest about what this format can tell us,
+    matching the same "no claim is better than a wrong one"
+    principle used throughout grounding and retrieval.
+
+    Body paragraphs are extracted in document order. Any tables are
+    appended afterward as simple pipe-joined rows via
+    _flatten_docx_table, so table content is never silently
+    dropped - not the full Symbol/Parameter/value reconstruction
+    extract_text_from_pdf does for detected PDF tables, which is
+    deferred until a real Word document with meaningful tables
+    actually needs it.
+    """
+    document = DocxDocument(file_path)
+
+    paragraphs = [p.text for p in document.paragraphs if p.text.strip()]
+    text = "\n".join(paragraphs)
+
+    table_sections = [
+        table_text
+        for table_text in (_flatten_docx_table(table) for table in document.tables)
+        if table_text
+    ]
+
+    if table_sections:
+        joined_tables = "\n\n".join(table_sections)
+        text = f"{text}\n\n{joined_tables}" if text else joined_tables
+
+    return [{"page": 1, "text": text}]
+
+
+def _flatten_docx_table(table):
+    """
+    Turns one Word table into plain pipe-joined rows (e.g.
+    "Symbol | Value | Unit" per row) - a simple, lossless fallback,
+    not the structured reconstruction extract_text_from_pdf does
+    for PDF tables. Rows with no content in any cell are skipped.
+    """
+    lines = []
+    for row in table.rows:
+        cells = [cell.text.strip() for cell in row.cells]
+        if any(cells):
+            lines.append(" | ".join(cells))
+    return "\n".join(lines)
+
+
+def extract_text(file_path):
+    """
+    Format dispatcher (RAG v8.3.1): picks the right extractor by
+    file extension, so callers (ingestion.py) don't need to know
+    which document format they're handling - every extractor
+    returns the same [{"page": N, "text": ...}] shape regardless
+    of source format.
+
+    Raises ValueError for an unsupported extension rather than
+    silently misreading a file with the wrong extractor.
+    """
+    extension = os.path.splitext(file_path)[1].lower()
+
+    if extension == ".pdf":
+        return extract_text_from_pdf(file_path)
+    if extension == ".docx":
+        return extract_text_from_docx(file_path)
+
+    raise ValueError(f"Unsupported document format: '{extension}'")

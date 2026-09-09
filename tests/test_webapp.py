@@ -249,12 +249,12 @@ def test_upload_rejects_missing_file(monkeypatch):
     assert b"Please choose a file to upload." in response.data
 
 
-def test_upload_rejects_non_pdf_file(monkeypatch):
+def test_upload_rejects_unsupported_file_type(monkeypatch):
     stub_history(monkeypatch)
     client = make_client()
     data = {"document": (io.BytesIO(b"just some text"), "notes.txt")}
     response = client.post("/upload", data=data, content_type="multipart/form-data")
-    assert b"Please upload a PDF file." in response.data
+    assert b"Please upload a PDF or Word" in response.data
 
 
 def test_upload_saves_and_replaces_document(monkeypatch, tmp_path):
@@ -288,7 +288,37 @@ def test_upload_saves_and_replaces_document(monkeypatch, tmp_path):
     assert b"test.pdf" in response.data
     assert b"uploaded" in response.data.lower()
 
+def test_upload_accepts_docx_file(monkeypatch, tmp_path):
+    reset_state(monkeypatch)
+    stub_history(monkeypatch)
+    client = make_client()
 
+    saved_paths = []
+
+    def fake_add_or_replace_document(path):
+        saved_paths.append(path)
+        return [{"chunk_id": 1, "page": 1, "text": "hello", "source": path}]
+
+    def fake_replace_document_vectors(chunks, source, collection=None):
+        return len(chunks)
+
+    def fake_load_all_chunks(db_path=None):
+        return [{"chunk_id": 1, "page": 1, "text": "hello", "source": "data/documents/manual.docx"}]
+
+    monkeypatch.setattr(webapp, "_get_state", lambda: {"chunks": [], "collection": None})
+    monkeypatch.setattr(webapp, "add_or_replace_document", fake_add_or_replace_document)
+    monkeypatch.setattr(webapp, "replace_document_vectors", fake_replace_document_vectors)
+    monkeypatch.setattr(webapp, "load_all_chunks", fake_load_all_chunks)
+    monkeypatch.setattr(webapp, "DOCUMENTS_FOLDER", str(tmp_path))
+
+    data = {"document": (io.BytesIO(b"fake docx bytes"), "manual.docx")}
+    response = client.post("/upload", data=data, content_type="multipart/form-data")
+
+    assert response.status_code == 200
+    assert saved_paths, "add_or_replace_document should have been called"
+    assert b"manual.docx" in response.data
+    assert b"uploaded" in response.data.lower()
+    
 def test_upload_warns_when_no_chunks_extracted(monkeypatch, tmp_path):
     reset_state(monkeypatch)
     stub_history(monkeypatch)

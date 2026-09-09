@@ -21,7 +21,7 @@ Must not contain:
       order
     - Retrieval or LLM logic
 """
-from src.document_loader import extract_text_from_pdf
+from src.document_loader import extract_text
 from src.text_cleaner import clean_text
 from src.chunker import create_document_chunks
 from src.chunk_store import (
@@ -38,7 +38,7 @@ from src.vector_store import (
 from src.config import CHUNK_DB_PATH
 
 
-def add_or_replace_document(pdf_path, db_path=CHUNK_DB_PATH):
+def add_or_replace_document(file_path, db_path=CHUNK_DB_PATH):
     """
     Add a document to the persistent chunk repository, replacing
     any previously stored chunks for the same source.
@@ -54,10 +54,12 @@ def add_or_replace_document(pdf_path, db_path=CHUNK_DB_PATH):
     that's what keeps this document's chunk_ids from ever colliding
     with, or renumbering, any other document already stored.
 
-    Args:
-        pdf_path: Path to the PDF file being added or updated. Used
-            as the chunk "source" identity - re-uploading a file
-            under this same path/name is what triggers a replace.
+        Args:
+        file_path: Path to the document being added or updated (PDF
+            or, as of RAG v8.3.1, Word/.docx - see
+            document_loader.extract_text). Used as the chunk
+            "source" identity - re-uploading a file under this same
+            path/name is what triggers a replace.
         db_path: Path to the SQLite chunk database (overridable for
             tests).
 
@@ -66,11 +68,11 @@ def add_or_replace_document(pdf_path, db_path=CHUNK_DB_PATH):
         persisted in the chunk repository - NOT yet embedded or
         stored in the vector store, see replace_document_vectors).
     """
-    source = pdf_path
+    source = file_path
 
     delete_chunks_by_source(source, db_path)
 
-    pages = extract_text_from_pdf(pdf_path)
+    pages = extract_text(file_path)
 
     for page in pages:
         page["text"] = clean_text(page["text"])

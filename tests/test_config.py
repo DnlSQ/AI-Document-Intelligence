@@ -57,4 +57,31 @@ def test_discover_document_paths_returns_sorted_paths(tmp_path):
         f"{tmp_path}/alpha.pdf",
         f"{tmp_path}/zebra.pdf",
     ]
-    
+def test_discover_document_paths_finds_docx_files_too(tmp_path):
+    (tmp_path / "a.pdf").write_text("fake pdf content")
+    (tmp_path / "manual.docx").write_text("fake docx content")
+
+    found = discover_document_paths(str(tmp_path))
+
+    assert found == [
+        f"{tmp_path}/a.pdf",
+        f"{tmp_path}/manual.docx",
+    ]
+
+
+def test_discover_document_paths_is_case_insensitive_to_docx_extension(tmp_path):
+    (tmp_path / "MANUAL.DOCX").write_text("fake docx content")
+
+    found = discover_document_paths(str(tmp_path))
+
+    assert found == [f"{tmp_path}/MANUAL.DOCX"]
+
+
+def test_discover_document_paths_still_ignores_unsupported_extensions(tmp_path):
+    (tmp_path / "a.pdf").write_text("fake pdf content")
+    (tmp_path / "notes.txt").write_text("not supported")
+    (tmp_path / "sheet.xlsx").write_text("not yet supported")
+
+    found = discover_document_paths(str(tmp_path))
+
+    assert found == [f"{tmp_path}/a.pdf"]

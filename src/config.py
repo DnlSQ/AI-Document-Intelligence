@@ -13,13 +13,14 @@ DOCUMENTS_FOLDER = "data/documents"
 
 def discover_document_paths(folder=DOCUMENTS_FOLDER):
     """
-    Scan a folder for PDF files.
+    Scan a folder for supported document files: PDF and, as of
+    RAG v8.3.1, Word (.docx).
 
     Args:
         folder: Folder to scan. Defaults to DOCUMENTS_FOLDER.
 
     Returns:
-        Full paths to every ".pdf" file directly inside the
+        Full paths to every supported file directly inside the
         folder (case-insensitive extension match, not recursive),
         sorted alphabetically for a deterministic ingestion order -
         this matters because chunk_id assignment order depends on
@@ -31,10 +32,12 @@ def discover_document_paths(folder=DOCUMENTS_FOLDER):
     if not os.path.isdir(folder):
         return []
 
+    supported_extensions = (".pdf", ".docx")
+
     return sorted(
         f"{folder.rstrip('/')}/{filename}"
         for filename in os.listdir(folder)
-        if filename.lower().endswith(".pdf")
+        if filename.lower().endswith(supported_extensions)
     )
 
 

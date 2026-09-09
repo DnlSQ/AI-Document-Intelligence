@@ -124,10 +124,10 @@ def upload():
         )
 
     filename = secure_filename(uploaded_file.filename)
-    if not filename.lower().endswith(".pdf"):
+    if not filename.lower().endswith((".pdf", ".docx")):
         return render_template(
             "index.html", documents=documents, history=history,
-            upload_error="Please upload a PDF file."
+            upload_error="Please upload a PDF or Word (.docx) file."
         )
 
     os.makedirs(DOCUMENTS_FOLDER, exist_ok=True)
@@ -145,9 +145,10 @@ def upload():
     if not chunks:
         return render_template(
             "index.html", documents=documents, history=history,
-            upload_warning=(
+                        upload_warning=(
                 f"'{filename}' was uploaded, but no text could be extracted from it "
-                "(it may be a scanned or image-only PDF)."
+                "(it may be empty, a scanned/image-only PDF, or a Word document "
+                "with no readable text)."
             )
         )
 

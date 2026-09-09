@@ -279,4 +279,136 @@ def test_split_multi_symbol_row_returns_none_when_symbol_lines_do_not_divide_eve
     row = ["t\nr\nt", "Output rise time\nOutput fall time", "100\n100", "", "", "", "", "", "ns"]
 
     assert _split_multi_symbol_row(row) is None
-    
+
+from docx import Document as DocxDocument
+from src.document_loader import extract_text_from_docx, extract_text, _flatten_docx_table
+
+
+# ---------------------------------------------------------------
+# extract_text_from_docx (RAG v8.3.1) - Word documents have no
+# fixed page count in the file itself (pagination is computed by
+# Word at render time), so the whole document comes back as a
+# single page (page=1) rather than a guessed page number.
+# ---------------------------------------------------------------
+
+def make_docx(tmp_path, paragraphs=None, table_rows=None, filename="test.docx"):
+    document = DocxDocument()
+    for paragraph_text in paragraphs or []:
+        document.add_paragraph(paragraph_text)
+    if table_rows:
+        table = document.add_table(rows=0, cols=len(table_rows[0]))
+        for row_values in table_rows:
+            row = table.add_row()
+            for cell, value in zip(row.cells, row_values):
+                cell.text = value
+    path = tmp_path / filename
+    document.save(str(path))
+    return str(path)
+
+
+def test_extract_text_from_docx_returns_single_page_with_paragraph_text(tmp_path):
+    path = make_docx(tmp_path, paragraphs=["First paragraph.", "Second paragraph."])
+
+    pages = extract_text_from_docx(path)
+
+    assert len(pages) == 1
+    assert pages[0]["page"] == 1
+    assert "First paragraph." in pages[0]["text"]
+    assert "Second paragraph." in pages[0]["text"]
+
+
+def test_extract_text_from_docx_skips_empty_paragraphs(tmp_path):
+    path = make_docx(tmp_path, paragraphs=["Real content.", "", "   "])
+
+    pages = extract_text_from_docx(path)
+
+    lines = [line for line in pages[0]["text"].split("\n") if line.strip()]
+    assert lines == ["Real content."]
+
+
+def test_extract_text_from_docx_includes_table_content(tmp_path):
+    path = make_docx(
+        tmp_path,
+        paragraphs=["Specifications:"],
+        table_rows=[["Symbol", "Value", "Unit"], ["VCEO", "-50", "V"]],
+    )
+
+    pages = extract_text_from_docx(path)
+    text = pages[0]["text"]
+
+    assert "Specifications:" in text
+    assert "VCEO | -50 | V" in text
+
+
+class FakeDocxCell:
+    def __init__(self, text):
+        self.text = text
+
+
+class FakeDocxRow:
+    def __init__(self, texts):
+        self.cells = [FakeDocxCell(t) for t in texts]
+
+
+class FakeDocxTable:
+    def __init__(self, rows):
+        self.rows = [FakeDocxRow(r) for r in rows]
+
+
+def test_flatten_docx_table_joins_cells_with_pipe():
+    table = FakeDocxTable([["Symbol", "Value"], ["VCEO", "-50"]])
+
+    assert _flatten_docx_table(table) == "Symbol | Value\nVCEO | -50"
+
+
+def test_flatten_docx_table_skips_fully_empty_rows():
+    table = FakeDocxTable([["Symbol", "Value"], ["", ""]])
+
+    assert _flatten_docx_table(table) == "Symbol | Value"
+
+
+# ---------------------------------------------------------------
+# extract_text (RAG v8.3.1) - format dispatcher: picks the right
+# extractor by file extension so ingestion.py doesn't need to know
+# which document format it's handling.
+# ---------------------------------------------------------------
+
+def test_extract_text_dispatches_to_pdf_extractor(monkeypatch):
+    calls = []
+    monkeypatch.setattr(
+        "src.document_loader.extract_text_from_pdf",
+        lambda path: calls.append(path) or [{"page": 1, "text": "pdf text"}]
+    )
+
+    result = extract_text("sample.pdf")
+
+    assert calls == ["sample.pdf"]
+    assert result == [{"page": 1, "text": "pdf text"}]
+
+
+def test_extract_text_dispatches_to_docx_extractor(monkeypatch):
+    calls = []
+    monkeypatch.setattr(
+        "src.document_loader.extract_text_from_docx",
+        lambda path: calls.append(path) or [{"page": 1, "text": "docx text"}]
+    )
+
+    result = extract_text("manual.docx")
+
+    assert calls == ["manual.docx"]
+    assert result == [{"page": 1, "text": "docx text"}]
+
+
+def test_extract_text_is_case_insensitive_to_extension(monkeypatch):
+    monkeypatch.setattr(
+        "src.document_loader.extract_text_from_docx",
+        lambda path: [{"page": 1, "text": "docx text"}]
+    )
+
+    assert extract_text("MANUAL.DOCX") == [{"page": 1, "text": "docx text"}]
+
+
+def test_extract_text_raises_for_an_unsupported_extension():
+    import pytest
+    with pytest.raises(ValueError):
+        extract_text("notes.txt")
