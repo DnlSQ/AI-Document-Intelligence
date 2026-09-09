@@ -1,5 +1,7 @@
 # AI Document Intelligence
 
+[![Tests](https://github.com/DnlSQ/AI-Document-Intelligence/actions/workflows/tests.yml/badge.svg)](https://github.com/DnlSQ/AI-Document-Intelligence/actions/workflows/tests.yml)
+
 > A local AI assistant designed to help technicians
 > retrieve and understand technical documentation
 > during equipment troubleshooting.
@@ -663,3 +665,5 @@ Electronics Technician
 www.linkedin.com/in/daniel-felipe-solano-quiros
 
 Costa Rica
+
+```
