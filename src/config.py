@@ -47,6 +47,13 @@ def discover_document_paths(folder=DOCUMENTS_FOLDER):
 DOCUMENT_PATHS = discover_document_paths()
 
 CHUNK_DB_PATH = "data/chunk_store.db"
+# V8.4.1: maximum accepted upload size, enforced by Flask's
+# MAX_CONTENT_LENGTH (src/webapp.py) before an oversized request
+# ever reaches the upload route. 20 MB comfortably covers a large
+# technical PDF/manual with embedded diagrams while still rejecting
+# something clearly wrong (e.g. an accidental multi-hundred-MB
+# upload) before it can tie up the server.
+MAX_UPLOAD_SIZE_BYTES = 20 * 1024 * 1024
 QA_HISTORY_DB_PATH = "data/qa_history.db"
 
 # Number of chunks retrieved per question and passed to the generator.

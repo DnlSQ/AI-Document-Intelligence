@@ -311,7 +311,7 @@ def test_upload_accepts_docx_file(monkeypatch, tmp_path):
     monkeypatch.setattr(webapp, "load_all_chunks", fake_load_all_chunks)
     monkeypatch.setattr(webapp, "DOCUMENTS_FOLDER", str(tmp_path))
 
-    data = {"document": (io.BytesIO(b"fake docx bytes"), "manual.docx")}
+    data = {"document": (io.BytesIO(b"PK\x03\x04fake docx bytes"), "manual.docx")}
     response = client.post("/upload", data=data, content_type="multipart/form-data")
 
     assert response.status_code == 200
@@ -342,7 +342,7 @@ def test_upload_accepts_xlsx_file(monkeypatch, tmp_path):
     monkeypatch.setattr(webapp, "load_all_chunks", fake_load_all_chunks)
     monkeypatch.setattr(webapp, "DOCUMENTS_FOLDER", str(tmp_path))
 
-    data = {"document": (io.BytesIO(b"fake xlsx bytes"), "specs.xlsx")}
+    data = {"document": (io.BytesIO(b"PK\x03\x04fake xlsx bytes"), "specs.xlsx")}
     response = client.post("/upload", data=data, content_type="multipart/form-data")
 
     assert response.status_code == 200
@@ -707,4 +707,64 @@ def test_ask_answer_does_not_reappear_on_a_second_home_page_visit(monkeypatch):
     second_visit = client.get("/")
 
     assert "The maximum collector-emitter voltage is -50 V." not in second_visit.get_data(as_text=True)
+
+# ---------------------------------------------------------------
+# Upload content validation - V8.4.1 (security hardening)
+# ---------------------------------------------------------------
+
+def test_content_matches_extension_accepts_real_pdf_signature():
+    assert webapp._content_matches_extension(b"%PDF-1.4 rest of file", ".pdf")
+
+
+def test_content_matches_extension_rejects_non_pdf_content_for_pdf_extension():
+    assert not webapp._content_matches_extension(b"This is not a PDF", ".pdf")
+
+
+def test_content_matches_extension_accepts_zip_signature_for_docx_and_xlsx():
+    assert webapp._content_matches_extension(b"PK\x03\x04 rest", ".docx")
+    assert webapp._content_matches_extension(b"PK\x03\x04 rest", ".xlsx")
+
+
+def test_content_matches_extension_rejects_non_zip_content_for_docx_and_xlsx():
+    assert not webapp._content_matches_extension(b"plain text", ".docx")
+    assert not webapp._content_matches_extension(b"plain text", ".xlsx")
+
+
+def test_content_matches_extension_returns_false_for_unknown_extension():
+    assert not webapp._content_matches_extension(b"%PDF-1.4", ".txt")
+
+
+def test_is_within_documents_folder_accepts_direct_child_path(tmp_path):
+    folder = str(tmp_path)
+    path = str(tmp_path / "manual.pdf")
+    assert webapp._is_within_documents_folder(path, folder)
+
+
+def test_is_within_documents_folder_rejects_path_outside_folder(tmp_path):
+    folder = str(tmp_path / "documents")
+    outside = str(tmp_path / "outside.pdf")
+    assert not webapp._is_within_documents_folder(outside, folder)
+
+
+def test_upload_rejects_content_that_does_not_match_extension(monkeypatch):
+    stub_history(monkeypatch)
+    client = make_client()
+
+    data = {"document": (io.BytesIO(b"This is plain text, not a real PDF."), "fake.pdf")}
+    response = client.post("/upload", data=data, content_type="multipart/form-data")
+
+    assert b"doesn&#39;t look like a valid" in response.data or b"doesn't look like a valid" in response.data
+
+
+def test_upload_rejects_file_larger_than_max_content_length(monkeypatch):
+    stub_history(monkeypatch)
+    monkeypatch.setattr(webapp, "_get_state", lambda: {"chunks": [], "collection": None})
+    monkeypatch.setitem(webapp.app.config, "MAX_CONTENT_LENGTH", 10)
+    client = make_client()
+
+    data = {"document": (io.BytesIO(b"%PDF-1.4" + b"0" * 100), "big.pdf")}
+    response = client.post("/upload", data=data, content_type="multipart/form-data")
+
+    assert response.status_code == 413
+    assert b"too large" in response.data.lower()
     

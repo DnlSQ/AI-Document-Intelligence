@@ -19,12 +19,13 @@ import threading
 
 from flask import Flask, render_template, request, redirect, url_for, session
 from werkzeug.utils import secure_filename
+from werkzeug.exceptions import RequestEntityTooLarge
 
 from src.main import initialize_system, answer_question
 from src.ingestion import add_or_replace_document, replace_document_vectors, delete_document
 from src.chunk_store import load_all_chunks
 from src.qa_history import save_qa_pair, load_history
-from src.config import DOCUMENTS_FOLDER, CHUNK_DB_PATH
+from src.config import DOCUMENTS_FOLDER, CHUNK_DB_PATH, MAX_UPLOAD_SIZE_BYTES
 
 app = Flask(__name__, template_folder="../templates", static_folder="../static")
 
@@ -35,6 +36,13 @@ app = Flask(__name__, template_folder="../templates", static_folder="../static")
 # needs to survive across app restarts.
 app.secret_key = "ai-document-intelligence-local-dev-key"
 
+# V8.4.1: reject an upload before it ever reaches the /upload route
+# if the request body exceeds this size - Werkzeug enforces it at
+# the WSGI level and raises RequestEntityTooLarge, handled by the
+# errorhandler below so the user sees the app's normal error box
+# instead of a generic 413 page.
+
+app.config["MAX_CONTENT_LENGTH"] = MAX_UPLOAD_SIZE_BYTES
 # Number of most recent Q&A pairs shown in the history panel.
 HISTORY_DISPLAY_LIMIT = 10
 
@@ -64,6 +72,53 @@ def _document_summary(chunks):
         for source, count in sorted(counts.items())
     ]
 
+# V8.4.1: minimal "magic bytes" signatures used to confirm an
+# uploaded file's content actually matches its extension, not just
+# its name - catches the simple, common case of a file renamed to
+# look like a supported document. .docx and .xlsx are both
+# OOXML/ZIP-based formats, so they share the same outer ZIP
+# signature; this does not distinguish a mislabeled .xlsx from a
+# mislabeled .docx (both are still valid ZIP archives), which is a
+# known, accepted limitation - deeper validation would mean opening
+# and inspecting the archive's internal structure, not worth the
+# complexity unless a real case shows it's needed.
+PDF_SIGNATURE = b"%PDF-"
+ZIP_SIGNATURE = b"PK\x03\x04"
+
+
+def _content_matches_extension(file_bytes, extension):
+    """
+    Check that a file's actual content matches what its extension
+    claims, using each format's standard magic-byte signature.
+
+    Args:
+        file_bytes: The raw bytes read from the uploaded file.
+        extension: Lowercase extension including the dot (e.g. ".pdf").
+
+    Returns:
+        True if the content's signature matches the extension's
+        expected format, False otherwise (including for an
+        extension this function doesn't recognize).
+    """
+    if extension == ".pdf":
+        return file_bytes.startswith(PDF_SIGNATURE)
+    if extension in (".docx", ".xlsx"):
+        return file_bytes.startswith(ZIP_SIGNATURE)
+    return False
+
+
+def _is_within_documents_folder(path, folder):
+    """
+    Defense-in-depth check that a resolved upload path stays inside
+    the documents folder. werkzeug's secure_filename (already
+    applied to every uploaded filename before this is called) already
+    strips path separators and ".." segments, so this should never
+    actually trigger - it exists as an explicit, tested guarantee
+    rather than an implicit assumption.
+    """
+    folder_abs = os.path.abspath(folder)
+    path_abs = os.path.abspath(path)
+    return path_abs == folder_abs or path_abs.startswith(folder_abs + os.sep)
 
 @app.route("/")
 def home():
@@ -124,15 +179,34 @@ def upload():
         )
 
     filename = secure_filename(uploaded_file.filename)
-    if not filename.lower().endswith((".pdf", ".docx", ".xlsx")):
+    extension = os.path.splitext(filename)[1].lower()
+    if extension not in (".pdf", ".docx", ".xlsx"):
         return render_template(
             "index.html", documents=documents, history=history,
             upload_error="Please upload a PDF, Word (.docx), or Excel (.xlsx) file."
         )
 
+    file_bytes = uploaded_file.read()
+    if not _content_matches_extension(file_bytes, extension):
+        return render_template(
+            "index.html", documents=documents, history=history,
+            upload_error=(
+                f"'{filename}' doesn't look like a valid {extension} file "
+                "(its content doesn't match the file type)."
+            )
+        )
+
     os.makedirs(DOCUMENTS_FOLDER, exist_ok=True)
     saved_path = f"{DOCUMENTS_FOLDER.rstrip('/')}/{filename}"
-    uploaded_file.save(saved_path)
+
+    if not _is_within_documents_folder(saved_path, DOCUMENTS_FOLDER):
+        return render_template(
+            "index.html", documents=documents, history=history,
+            upload_error="Invalid file name."
+        )
+
+    with open(saved_path, "wb") as f:
+        f.write(file_bytes)
 
     chunks = add_or_replace_document(saved_path)
     replace_document_vectors(chunks, saved_path, collection=state["collection"])
@@ -189,4 +263,14 @@ def delete():
 
 if __name__ == "__main__":
     app.run(debug=True)
-    
+
+@app.errorhandler(RequestEntityTooLarge)
+def handle_file_too_large(error):
+    state = _get_state()
+    documents = _document_summary(state["chunks"])
+    history = load_history(limit=HISTORY_DISPLAY_LIMIT)
+    max_mb = MAX_UPLOAD_SIZE_BYTES // (1024 * 1024)
+    return render_template(
+        "index.html", documents=documents, history=history,
+        upload_error=f"That file is too large. Please upload a file smaller than {max_mb} MB."
+    ), 413
