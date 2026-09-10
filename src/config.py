@@ -13,8 +13,8 @@ DOCUMENTS_FOLDER = "data/documents"
 
 def discover_document_paths(folder=DOCUMENTS_FOLDER):
     """
-    Scan a folder for supported document files: PDF and, as of
-    RAG v8.3.1, Word (.docx).
+    Scan a folder for supported document files: PDF, Word (.docx),
+    and Excel (.xlsx).
 
     Args:
         folder: Folder to scan. Defaults to DOCUMENTS_FOLDER.
@@ -32,14 +32,13 @@ def discover_document_paths(folder=DOCUMENTS_FOLDER):
     if not os.path.isdir(folder):
         return []
 
-    supported_extensions = (".pdf", ".docx")
+    supported_extensions = (".pdf", ".docx", ".xlsx")
 
     return sorted(
         f"{folder.rstrip('/')}/{filename}"
         for filename in os.listdir(folder)
         if filename.lower().endswith(supported_extensions)
     )
-
 
 # The system searches across ALL discovered documents together in
 # a single combined repository - the retriever naturally scores

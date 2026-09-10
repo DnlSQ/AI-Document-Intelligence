@@ -412,3 +412,137 @@ def test_extract_text_raises_for_an_unsupported_extension():
     import pytest
     with pytest.raises(ValueError):
         extract_text("notes.txt")
+
+import openpyxl
+from src.document_loader import extract_text_from_xlsx, _extract_sheet_text
+
+
+# ---------------------------------------------------------------
+# extract_text_from_xlsx (RAG v8.3.2) - each worksheet becomes one
+# "page" (numbered by its real position in the workbook), with the
+# sheet's own name embedded in the text. data_only=True reads each
+# formula cell's last-saved computed value instead of the raw
+# formula text.
+# ---------------------------------------------------------------
+
+def make_xlsx(tmp_path, sheets, filename="test.xlsx"):
+    """sheets: dict of {sheet_name: [[row1_values], [row2_values], ...]}"""
+    workbook = openpyxl.Workbook()
+    default_sheet = workbook.active
+    first = True
+    for sheet_name, rows in sheets.items():
+        if first:
+            sheet = default_sheet
+            sheet.title = sheet_name
+            first = False
+        else:
+            sheet = workbook.create_sheet(sheet_name)
+        for row in rows:
+            sheet.append(row)
+    path = tmp_path / filename
+    workbook.save(str(path))
+    return str(path)
+
+
+def test_extract_text_from_xlsx_reconstructs_header_value_rows(tmp_path):
+    path = make_xlsx(tmp_path, {
+        "Specs": [
+            ["Symbol", "Parameter", "Value", "Unit"],
+            ["Pmax", "Maximum operating pressure", -0.95, "bar"],
+        ]
+    })
+
+    pages = extract_text_from_xlsx(path)
+
+    assert len(pages) == 1
+    assert pages[0]["page"] == 1
+    text = pages[0]["text"]
+    assert "Sheet: Specs" in text
+    assert "Symbol: Pmax" in text
+    assert "Parameter: Maximum operating pressure" in text
+    assert "Value: -0.95" in text
+    assert "Unit: bar" in text
+
+
+def test_extract_text_from_xlsx_handles_multiple_sheets_as_separate_pages(tmp_path):
+    path = make_xlsx(tmp_path, {
+        "Specs": [["Symbol", "Value"], ["Pmax", -0.95]],
+        "Procedure": [["Step", "Description"], [1, "Power off the pump"]],
+    })
+
+    pages = extract_text_from_xlsx(path)
+
+    assert [p["page"] for p in pages] == [1, 2]
+    assert "Sheet: Specs" in pages[0]["text"]
+    assert "Sheet: Procedure" in pages[1]["text"]
+
+
+def test_extract_text_from_xlsx_skips_sheets_with_no_data_rows(tmp_path):
+    path = make_xlsx(tmp_path, {
+        "Specs": [["Symbol", "Value"], ["Pmax", -0.95]],
+        "Empty": [["Header only"]],
+    })
+
+    pages = extract_text_from_xlsx(path)
+
+    assert len(pages) == 1
+    assert pages[0]["text"].startswith("Sheet: Specs")
+
+
+def test_extract_text_from_xlsx_skips_cells_with_no_value_in_a_row(tmp_path):
+    path = make_xlsx(tmp_path, {
+        "Specs": [["Symbol", "Value", "Unit"], ["Pmax", -0.95, None]],
+    })
+
+    pages = extract_text_from_xlsx(path)
+
+    text = pages[0]["text"]
+    assert "Value: -0.95" in text
+    assert "Unit:" not in text
+
+
+class FakeSheet:
+    def __init__(self, rows):
+        self._rows = rows
+
+    def iter_rows(self, values_only=True):
+        return iter(self._rows)
+
+
+def test_extract_sheet_text_skips_leading_blank_rows_before_header():
+    sheet = FakeSheet([
+        (None, None),
+        ("Symbol", "Value"),
+        ("Pmax", -0.95),
+    ])
+
+    text = _extract_sheet_text(sheet, "Specs")
+
+    assert "Symbol: Pmax" in text
+    assert "Value: -0.95" in text
+
+
+def test_extract_sheet_text_returns_empty_string_for_a_sheet_with_only_a_header():
+    sheet = FakeSheet([("Symbol", "Value")])
+
+    assert _extract_sheet_text(sheet, "Specs") == ""
+
+
+def test_extract_sheet_text_returns_empty_string_for_a_completely_empty_sheet():
+    sheet = FakeSheet([])
+
+    assert _extract_sheet_text(sheet, "Specs") == ""
+
+
+def test_extract_text_dispatches_to_xlsx_extractor(monkeypatch):
+    calls = []
+    monkeypatch.setattr(
+        "src.document_loader.extract_text_from_xlsx",
+        lambda path: calls.append(path) or [{"page": 1, "text": "xlsx text"}]
+    )
+
+    result = extract_text("sheet.xlsx")
+
+    assert calls == ["sheet.xlsx"]
+    assert result == [{"page": 1, "text": "xlsx text"}]
+    

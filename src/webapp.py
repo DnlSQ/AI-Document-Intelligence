@@ -124,10 +124,10 @@ def upload():
         )
 
     filename = secure_filename(uploaded_file.filename)
-    if not filename.lower().endswith((".pdf", ".docx")):
+    if not filename.lower().endswith((".pdf", ".docx", ".xlsx")):
         return render_template(
             "index.html", documents=documents, history=history,
-            upload_error="Please upload a PDF or Word (.docx) file."
+            upload_error="Please upload a PDF, Word (.docx), or Excel (.xlsx) file."
         )
 
     os.makedirs(DOCUMENTS_FOLDER, exist_ok=True)

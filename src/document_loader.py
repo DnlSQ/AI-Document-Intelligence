@@ -14,6 +14,7 @@ information it already had.
 """
 import os
 
+import openpyxl
 import pymupdf
 from docx import Document as DocxDocument
 
@@ -307,13 +308,182 @@ def _flatten_docx_table(table):
     return "\n".join(lines)
 
 
+def extract_text_from_xlsx(file_path):
+    """
+    Extracts text from an Excel workbook (.xlsx) - RAG v8.3.2.
+
+    Each worksheet becomes one "page" (numbered by its position in
+    the workbook, 1-based) - unlike a Word document, this is a
+    real, stored boundary, not a guess. The sheet's own name is
+    also embedded directly in the extracted text (see
+    _extract_sheet_text), so grounding/source attribution can
+    still reference it meaningfully even though the rest of the
+    pipeline only understands numeric page numbers. A sheet with
+    no data rows below its header is skipped entirely.
+
+    data_only=True reads each formula cell's last-saved computed
+    value (cached by Excel when the file was saved) instead of the
+    raw formula text - a formula string like "=A2*1.8+32" reaching
+    the LLM as if it were data would silently corrupt grounding far
+    worse than no data at all. openpyxl never evaluates formulas
+    itself, so this only works for values Excel already computed
+    and cached; a workbook that was never opened/saved in Excel may
+    have no cached value for a formula cell, in which case it reads
+    as empty - a known limitation, not silently wrong data.
+    """
+    workbook = openpyxl.load_workbook(file_path, data_only=True)
+
+    pages = []
+    for sheet_index, sheet_name in enumerate(workbook.sheetnames, start=1):
+        sheet = workbook[sheet_name]
+        sheet_text = _extract_sheet_text(sheet, sheet_name)
+        if sheet_text:
+            pages.append({"page": sheet_index, "text": sheet_text})
+
+    return pages
+
+
+def _extract_sheet_text(sheet, sheet_name):
+    """
+    Reconstructs one worksheet into "<Header>: <value> | ..." lines,
+    one per data row - the first non-empty row is treated as the
+    header row. Simpler than _reconstruct_table's PDF logic: an
+    .xlsx file is already an exact structured grid, not a visually
+    detected approximation of one, so there's no merged-header or
+    packed-row ambiguity to resolve here. A column with no header
+    or no value in a given row is skipped rather than producing an
+    empty fact. Returns "" (not included as a page) when the sheet
+    has no header row, or no data rows below it.
+    """
+    rows = list(sheet.iter_rows(values_only=True))
+
+    header_row = None
+    header_index = None
+    for index, row in enumerate(rows):
+        if any(cell is not None and str(cell).strip() for cell in row):
+            header_row = row
+            header_index = index
+            break
+
+    if header_row is None:
+        return ""
+
+    headers = [str(cell).strip() if cell is not None else "" for cell in header_row]
+
+    lines = []
+    for row in rows[header_index + 1:]:
+        if not any(cell is not None and str(cell).strip() for cell in row):
+            continue
+        parts = []
+        for column_index, value in enumerate(row):
+            if value is None or str(value).strip() == "":
+                continue
+            label = (
+                headers[column_index]
+                if column_index < len(headers) and headers[column_index]
+                else f"Column {column_index + 1}"
+            )
+            parts.append(f"{label}: {value}")
+        if parts:
+            lines.append(" | ".join(parts))
+
+    if not lines:
+        return ""
+
+    return f"Sheet: {sheet_name}\n" + "\n".join(lines)
+
+
+def extract_text_from_xlsx(file_path):
+    """
+    Extracts text from an Excel workbook (.xlsx) - RAG v8.3.2.
+
+    Each worksheet becomes one "page" (numbered by its position in
+    the workbook, 1-based) - unlike a Word document, this is a
+    real, stored boundary, not a guess. The sheet's own name is
+    also embedded directly in the extracted text (see
+    _extract_sheet_text), so grounding/source attribution can
+    still reference it meaningfully even though the rest of the
+    pipeline only understands numeric page numbers. A sheet with
+    no data rows below its header is skipped entirely.
+
+    data_only=True reads each formula cell's last-saved computed
+    value (cached by Excel when the file was saved) instead of the
+    raw formula text - a formula string like "=A2*1.8+32" reaching
+    the LLM as if it were data would silently corrupt grounding far
+    worse than no data at all. openpyxl never evaluates formulas
+    itself, so this only works for values Excel already computed
+    and cached; a workbook that was never opened/saved in Excel may
+    have no cached value for a formula cell, in which case it reads
+    as empty - a known limitation, not silently wrong data.
+    """
+    workbook = openpyxl.load_workbook(file_path, data_only=True)
+
+    pages = []
+    for sheet_index, sheet_name in enumerate(workbook.sheetnames, start=1):
+        sheet = workbook[sheet_name]
+        sheet_text = _extract_sheet_text(sheet, sheet_name)
+        if sheet_text:
+            pages.append({"page": sheet_index, "text": sheet_text})
+
+    return pages
+
+
+def _extract_sheet_text(sheet, sheet_name):
+    """
+    Reconstructs one worksheet into "<Header>: <value> | ..." lines,
+    one per data row - the first non-empty row is treated as the
+    header row. Simpler than _reconstruct_table's PDF logic: an
+    .xlsx file is already an exact structured grid, not a visually
+    detected approximation of one, so there's no merged-header or
+    packed-row ambiguity to resolve here. A column with no header
+    or no value in a given row is skipped rather than producing an
+    empty fact. Returns "" (not included as a page) when the sheet
+    has no header row, or no data rows below it.
+    """
+    rows = list(sheet.iter_rows(values_only=True))
+
+    header_row = None
+    header_index = None
+    for index, row in enumerate(rows):
+        if any(cell is not None and str(cell).strip() for cell in row):
+            header_row = row
+            header_index = index
+            break
+
+    if header_row is None:
+        return ""
+
+    headers = [str(cell).strip() if cell is not None else "" for cell in header_row]
+
+    lines = []
+    for row in rows[header_index + 1:]:
+        if not any(cell is not None and str(cell).strip() for cell in row):
+            continue
+        parts = []
+        for column_index, value in enumerate(row):
+            if value is None or str(value).strip() == "":
+                continue
+            label = (
+                headers[column_index]
+                if column_index < len(headers) and headers[column_index]
+                else f"Column {column_index + 1}"
+            )
+            parts.append(f"{label}: {value}")
+        if parts:
+            lines.append(" | ".join(parts))
+
+    if not lines:
+        return ""
+
+    return f"Sheet: {sheet_name}\n" + "\n".join(lines)
+
+
 def extract_text(file_path):
     """
-    Format dispatcher (RAG v8.3.1): picks the right extractor by
-    file extension, so callers (ingestion.py) don't need to know
-    which document format they're handling - every extractor
-    returns the same [{"page": N, "text": ...}] shape regardless
-    of source format.
+    Format dispatcher: picks the right extractor by file extension,
+    so callers (ingestion.py) don't need to know which document
+    format they're handling - every extractor returns the same
+    [{"page": N, "text": ...}] shape regardless of source format.
 
     Raises ValueError for an unsupported extension rather than
     silently misreading a file with the wrong extractor.
@@ -324,5 +494,8 @@ def extract_text(file_path):
         return extract_text_from_pdf(file_path)
     if extension == ".docx":
         return extract_text_from_docx(file_path)
+    if extension == ".xlsx":
+        return extract_text_from_xlsx(file_path)
 
     raise ValueError(f"Unsupported document format: '{extension}'")
+

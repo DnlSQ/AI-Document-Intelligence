@@ -80,8 +80,21 @@ def test_discover_document_paths_is_case_insensitive_to_docx_extension(tmp_path)
 def test_discover_document_paths_still_ignores_unsupported_extensions(tmp_path):
     (tmp_path / "a.pdf").write_text("fake pdf content")
     (tmp_path / "notes.txt").write_text("not supported")
-    (tmp_path / "sheet.xlsx").write_text("not yet supported")
+    (tmp_path / "data.csv").write_text("not supported")
 
     found = discover_document_paths(str(tmp_path))
 
     assert found == [f"{tmp_path}/a.pdf"]
+
+
+def test_discover_document_paths_finds_xlsx_files_too(tmp_path):
+    (tmp_path / "a.pdf").write_text("fake pdf content")
+    (tmp_path / "sheet.xlsx").write_text("fake xlsx content")
+
+    found = discover_document_paths(str(tmp_path))
+
+    assert found == [
+        f"{tmp_path}/a.pdf",
+        f"{tmp_path}/sheet.xlsx",
+    ]
+    
