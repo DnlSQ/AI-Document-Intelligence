@@ -746,14 +746,18 @@ def test_is_within_documents_folder_rejects_path_outside_folder(tmp_path):
     assert not webapp._is_within_documents_folder(outside, folder)
 
 
-def test_upload_rejects_content_that_does_not_match_extension(monkeypatch):
+def test_upload_rejects_content_that_does_not_match_extension(monkeypatch, tmp_path):
     stub_history(monkeypatch)
+    monkeypatch.setattr(webapp, "DOCUMENTS_FOLDER", str(tmp_path))
     client = make_client()
 
     data = {"document": (io.BytesIO(b"This is plain text, not a real PDF."), "fake.pdf")}
     response = client.post("/upload", data=data, content_type="multipart/form-data")
 
-    assert b"doesn&#39;t look like a valid" in response.data or b"doesn't look like a valid" in response.data
+    assert (
+        b"doesn&#39;t look like a valid" in response.data
+        or b"doesn't look like a valid" in response.data
+    )
 
 
 def test_upload_rejects_file_larger_than_max_content_length(monkeypatch):
