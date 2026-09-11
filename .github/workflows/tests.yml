@@ -24,11 +24,17 @@ jobs:
         run: pip install -r requirements.txt
 
       - name: Audit dependencies for known vulnerabilities (V8.4.2)
+        # continue-on-error: pip-audit currently flags CVE-2026-45829 in
+        # chromadb (no fix version published yet) - that vulnerability is in
+        # chromadb's HTTP server component, which this app never runs (see
+        # src/vector_store.py: PersistentClient only, no network server).
+        # Kept non-blocking so a real, unpatchable, inapplicable finding
+        # doesn't turn CI red - re-evaluate if a future finding IS applicable.
         run: |
           pip install pip-audit
           pip-audit -r requirements.txt
         continue-on-error: true
-
+        
       - name: Run test suite
         run: pytest
         
