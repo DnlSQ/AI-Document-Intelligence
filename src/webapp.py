@@ -71,6 +71,30 @@ def _document_summary(chunks):
         }
         for source, count in sorted(counts.items())
     ]
+@app.after_request
+def _add_security_headers(response):
+    """
+    V8.4.3: baseline security headers. This is a fully local,
+    single-user app with no external content sources, but these
+    are cheap, standard protections worth having if the app is
+    ever reached through a proxy or port-forward the user didn't
+    intend:
+      - X-Content-Type-Options: stops the browser from guessing a
+        different content type than what the server declared.
+      - X-Frame-Options: stops the page from being embedded in a
+        frame on another site (clickjacking protection).
+      - Referrer-Policy: never leaks the local app's URLs to a
+        link the user clicks from inside it.
+
+    A stricter Content-Security-Policy was deliberately left out -
+    templates/index.html uses inline <script> tags, so a correct
+    CSP would need auditing every inline script/style to avoid
+    breaking the app. Revisit only if a real need appears.
+    """
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    response.headers["X-Frame-Options"] = "DENY"
+    response.headers["Referrer-Policy"] = "no-referrer"
+    return response
 
 # V8.4.1: minimal "magic bytes" signatures used to confirm an
 # uploaded file's content actually matches its extension, not just
@@ -261,8 +285,24 @@ def delete():
         delete_message=f"'{source}' was deleted."
     )
 
+def run_app():
+    """
+    V8.4.3: explicit, tested startup configuration. Binds to
+    127.0.0.1 only (never all network interfaces) and disables
+    Flask's debug mode - debug mode enables Werkzeug's interactive
+    debugger, which allows arbitrary code execution from any
+    request that reaches it. Acceptable during development, never
+    in a distributed app. Pulled out into its own function (rather
+    than living inline under __main__) specifically so it can be
+    covered by a test - the __main__ guard itself can't be
+    exercised by pytest, since it only runs when this file is
+    executed directly, not when it's imported.
+    """
+    app.run(host="127.0.0.1", debug=False)
+
+
 if __name__ == "__main__":
-    app.run(debug=True)
+    run_app()
 
 @app.errorhandler(RequestEntityTooLarge)
 def handle_file_too_large(error):

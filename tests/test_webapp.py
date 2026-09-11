@@ -771,4 +771,36 @@ def test_upload_rejects_file_larger_than_max_content_length(monkeypatch):
 
     assert response.status_code == 413
     assert b"too large" in response.data.lower()
-    
+
+# ---------------------------------------------------------------
+# Flask hardening - V8.4.3
+# ---------------------------------------------------------------
+
+def test_response_includes_baseline_security_headers(monkeypatch):
+    reset_state(monkeypatch)
+    stub_history(monkeypatch)
+    monkeypatch.setattr(
+        webapp,
+        "_get_state",
+        lambda: {"chunks": [], "collection": "fake-collection"}
+    )
+
+    response = make_client().get("/")
+
+    assert response.headers.get("X-Content-Type-Options") == "nosniff"
+    assert response.headers.get("X-Frame-Options") == "DENY"
+    assert response.headers.get("Referrer-Policy") == "no-referrer"
+
+
+def test_run_app_binds_to_localhost_only_with_debug_disabled(monkeypatch):
+    captured = {}
+
+    def fake_run(*args, **kwargs):
+        captured.update(kwargs)
+
+    monkeypatch.setattr(webapp.app, "run", fake_run)
+
+    webapp.run_app()
+
+    assert captured.get("host") == "127.0.0.1"
+    assert captured.get("debug") is False
